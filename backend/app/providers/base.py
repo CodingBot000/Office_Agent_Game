@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.models import AgentDecision, NPCState
+from app.models import AgentDecision, IntentClassification, NPCState
 
 
 class ProviderError(RuntimeError):
@@ -19,9 +19,28 @@ class DecisionContext:
     incident_rules: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class IntentContext:
+    player_input: str
+    current_location: str
+    available_npcs: tuple[str, ...]
+    available_npc_ids: tuple[str, ...]
+    available_evidence_ids: tuple[str, ...]
+    available_locations: tuple[str, ...]
+    available_actions: tuple[str, ...]
+
+
 class AgentProvider(Protocol):
     name: str
     model: str
 
     def decide(self, context: DecisionContext) -> AgentDecision:
         """Return one schema-validated NPC decision candidate."""
+
+
+class IntentProvider(Protocol):
+    name: str
+    model: str
+
+    def classify(self, context: IntentContext) -> IntentClassification:
+        """Return one schema-validated player intent candidate."""

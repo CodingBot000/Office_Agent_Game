@@ -5,37 +5,36 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TypeVar
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
-from app.models import AgentDecision
-from app.providers.base import DecisionContext, ProviderError
+from app.models import AgentDecision, IntentClassification
+from app.providers.base import DecisionContext, IntentContext, ProviderError
 
 
-class CliDecisionProvider:
-    """Run the locally authenticated Codex CLI as a structured decision provider."""
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
-    name = "cli"
 
-    def __init__(self, settings: Settings) -> None:
-        self.model = settings.ai_cli_model
+class CliStructuredExecutor:
+    """Shared Codex CLI runner for structured intent and agent decisions."""
+
+    def __init__(self, settings: Settings, model: str) -> None:
         self.command = settings.ai_cli_command
+        self.model = model
         self.timeout_seconds = settings.ai_cli_timeout_seconds
         self.working_directory = Path(__file__).resolve().parents[2]
 
-    def decide(self, context: DecisionContext) -> AgentDecision:
+    def run(self, model_type: type[StructuredModel], prompt: str) -> StructuredModel:
         with tempfile.TemporaryDirectory(prefix="office-agent-cli-") as temp_dir:
             temp_path = Path(temp_dir)
-            schema_path = temp_path / "agent_decision.schema.json"
-            output_path = temp_path / "agent_decision.json"
-            schema = self._strict_schema(AgentDecision.model_json_schema())
+            schema_path = temp_path / "structured_output.schema.json"
+            output_path = temp_path / "structured_output.json"
             schema_path.write_text(
-                json.dumps(schema, ensure_ascii=False),
+                json.dumps(self._strict_schema(model_type.model_json_schema()), ensure_ascii=False),
                 encoding="utf-8",
             )
-
-            prompt = self._build_prompt(context)
             command = [
                 self.command,
                 "exec",
@@ -86,20 +85,9 @@ class CliDecisionProvider:
 
             try:
                 payload = json.loads(output_path.read_text(encoding="utf-8"))
-                decision = AgentDecision.model_validate(payload)
+                return model_type.model_validate(payload)
             except (json.JSONDecodeError, ValidationError) as exc:
-                raise ProviderError("CLI provider returned invalid AgentDecision JSON") from exc
-
-            if decision.npc_id != context.npc.id:
-                raise ProviderError("CLI provider returned a decision for the wrong NPC")
-            action_aliases = {
-                "present_evidence": "show_evidence",
-                "reveal_evidence": "show_evidence",
-                "respond": "dialogue",
-            }
-            if decision.action_type in action_aliases:
-                decision = decision.model_copy(update={"action_type": action_aliases[decision.action_type]})
-            return decision
+                raise ProviderError(f"CLI provider returned invalid {model_type.__name__} JSON") from exc
 
     def _strict_schema(self, schema: dict[str, object]) -> dict[str, object]:
         """Make Pydantic's schema compatible with strict structured output."""
@@ -123,6 +111,29 @@ class CliDecisionProvider:
             if isinstance(schema.get(key), list):
                 schema[key] = [self._strict_schema(value) if isinstance(value, dict) else value for value in schema[key]]
         return schema
+
+
+class CliDecisionProvider:
+    """Run the locally authenticated Codex CLI as an NPC decision provider."""
+
+    name = "cli"
+
+    def __init__(self, settings: Settings) -> None:
+        self.model = settings.ai_cli_model
+        self.executor = CliStructuredExecutor(settings, self.model)
+
+    def decide(self, context: DecisionContext) -> AgentDecision:
+        decision = self.executor.run(AgentDecision, self._build_prompt(context))
+        if decision.npc_id != context.npc.id:
+            raise ProviderError("CLI provider returned a decision for the wrong NPC")
+        action_aliases = {
+            "present_evidence": "show_evidence",
+            "reveal_evidence": "show_evidence",
+            "respond": "dialogue",
+        }
+        if decision.action_type in action_aliases:
+            decision = decision.model_copy(update={"action_type": action_aliases[decision.action_type]})
+        return decision
 
     def _build_prompt(self, context: DecisionContext) -> str:
         npc = context.npc
@@ -152,5 +163,48 @@ Rules:
 - Keep dialogue short, natural, and grounded only in the supplied context.
 
 Current decision context:
+{context_json}
+"""
+
+
+class CliIntentProvider:
+    """Use local Codex CLI auth to classify player intent into a strict schema."""
+
+    name = "cli"
+
+    def __init__(self, settings: Settings) -> None:
+        self.model = settings.ai_cli_model
+        self.executor = CliStructuredExecutor(settings, self.model)
+
+    def classify(self, context: IntentContext) -> IntentClassification:
+        return self.executor.run(IntentClassification, self._build_prompt(context))
+
+    def _build_prompt(self, context: IntentContext) -> str:
+        context_json = json.dumps(
+            {
+                "player_input": context.player_input,
+                "current_location": context.current_location,
+                "available_npcs": context.available_npcs,
+                "available_evidence_ids": context.available_evidence_ids,
+                "available_locations": context.available_locations,
+                "available_actions": context.available_actions,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return f"""You classify one player message for an office incident simulator.
+
+Return only one JSON object matching the supplied IntentClassification schema. Do not return
+Markdown, explanations, hidden reasoning, or chain-of-thought.
+
+Rules:
+- Infer meaning, not just exact keywords. Korean colloquial questions such as '뭐야', '궁금해',
+  '설명해줘', and '왜 그래' are ask when the player requests information.
+- Use only the supplied IDs for target_npc_id and evidence_id.
+- Use location only for move or summon_meeting intents.
+- Choose the closest action from the supplied available_actions.
+- Never invent a target, evidence, location, or action.
+
+Current context:
 {context_json}
 """

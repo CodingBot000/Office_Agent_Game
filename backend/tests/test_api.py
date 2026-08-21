@@ -23,4 +23,5 @@ def test_session_action_api() -> None:
     )
     assert action_response.status_code == 200
     assert action_response.json()["classified_action"] == "ask"
+    assert action_response.json()["intent_provider"] == "deterministic-mock"
     assert action_response.json()["snapshot"]["turn"] == 1

@@ -18,11 +18,12 @@ from app.models import (
     GameSnapshot,
     GuardrailCheck,
     IncidentReportRequest,
+    IntentClassification,
     Memory,
     NPCState,
 )
-from app.providers import AgentProvider, DecisionContext, ProviderError, create_provider
-from app.providers.deterministic import DeterministicDecisionProvider
+from app.providers import AgentProvider, DecisionContext, IntentContext, IntentProvider, ProviderError, create_intent_provider, create_provider
+from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
 
 
 AVAILABLE_ACTIONS = [
@@ -73,11 +74,18 @@ class SessionNotFoundError(KeyError):
 class GameEngine:
     """Authoritative game loop with a replaceable agent decision provider."""
 
-    def __init__(self, provider: AgentProvider | None = None, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        provider: AgentProvider | None = None,
+        intent_provider: IntentProvider | None = None,
+        settings: Settings | None = None,
+    ) -> None:
         self._sessions: dict[str, GameSession] = {}
         self.settings = settings or get_settings()
         self.provider = provider or create_provider(self.settings)
+        self.intent_provider = intent_provider or create_intent_provider(self.settings)
         self.fallback_provider = DeterministicDecisionProvider()
+        self.intent_fallback_provider = DeterministicIntentProvider()
 
     def create_session(self) -> GameSnapshot:
         session = GameSession(session_id=str(uuid4()))
@@ -102,12 +110,21 @@ class GameEngine:
                 snapshot=self.snapshot(session),
                 classified_action="completed",
                 message="이미 종료된 사건입니다. 새 세션을 시작하세요.",
+                intent_provider=self.intent_provider.name,
+                intent_confidence=1.0,
             )
 
         session.turn += 1
-        action, target_id = self._classify_action(text)
-        message = self._handle_action(session, action, target_id, text)
-        return ActionResponse(snapshot=self.snapshot(session), classified_action=action, message=message)
+        intent, intent_fallback = self._classify_intent(session, text)
+        message = self._handle_action(session, intent, text)
+        return ActionResponse(
+            snapshot=self.snapshot(session),
+            classified_action=intent.intent,
+            message=message,
+            intent_provider=self.intent_provider.name,
+            intent_confidence=intent.confidence,
+            intent_fallback_used=intent_fallback,
+        )
 
     def submit_report(self, session_id: str, report: IncidentReportRequest) -> GameSnapshot:
         session = self.get_session(session_id)
@@ -150,44 +167,58 @@ class GameEngine:
             result=session.result,
         )
 
-    def _classify_action(self, text: str) -> tuple[str, str | None]:
-        normalized = text.strip().lower()
-        target_id = self._resolve_target(normalized)
-        if any(keyword in normalized for keyword in ("최종 보고", "보고 제출", "report", "결론 제출")):
-            return "report_conclusion", target_id
-        if any(keyword in normalized for keyword in ("증거", "메시지 기록", "로그 확인", "기록 확인", "inspect", "조사")):
-            if any(keyword in normalized for keyword in ("보여", "제시", "전달", "공개", "backend", "백엔드")):
-                return "show_evidence", target_id
-            return "inspect", target_id
-        if any(keyword in normalized for keyword in ("회의", "모두", "summon")):
-            return "summon_meeting", target_id
-        if any(keyword in normalized for keyword in ("롤백", "rollback", "배포 중단")):
-            return "order", target_id
-        if any(keyword in normalized for keyword in ("책임", "원인", "잘못", "비난", "accuse", "뒤집어")):
-            return "accuse", target_id
-        if any(keyword in normalized for keyword in ("묻", "질문", "알고", "무엇", "왜", "뭐야", "뭐가", "무슨", "알려", "설명", "말해", "궁금", "ask", "question")):
-            return "ask", target_id
-        if any(keyword in normalized for keyword in ("이동", "move", "자리", "회의실로")):
-            return "move", target_id
-        return "talk", target_id
+    def _classify_intent(self, session: GameSession, text: str) -> tuple[IntentClassification, bool]:
+        context = IntentContext(
+            player_input=text,
+            current_location=session.current_location,
+            available_npcs=tuple(f"{npc.id}: {npc.name} ({npc.role})" for npc in session.npcs.values()),
+            available_npc_ids=tuple(session.npcs),
+            available_evidence_ids=tuple(session.evidences),
+            available_locations=("meeting_room", "dev_area", "qa_desk", "pm_desk"),
+            available_actions=tuple(AVAILABLE_ACTIONS),
+        )
+        try:
+            candidate = self.intent_provider.classify(context)
+            provider_fallback = False
+        except ProviderError:
+            self._append_event(
+                session,
+                "Intent Agent",
+                f"{self.intent_provider.name} intent provider failed; deterministic classifier used.",
+                "intent_fallback",
+            )
+            candidate = self.intent_fallback_provider.classify(context)
+            provider_fallback = True
+        validated, validation_fallback = self._validate_intent(session, context, candidate)
+        return validated, provider_fallback or validation_fallback
 
-    def _resolve_target(self, text: str) -> str | None:
-        aliases = {
-            "backend_01": ("backend", "백엔드", "백엔드 개발자", "서버"),
-            "frontend_01": ("frontend", "프론트", "프론트엔드", "클라이언트"),
-            "pm_01": ("pm", "기획", "planner", "플래너"),
-            "qa_01": ("qa", "품질", "테스트", "qa 엔지니어"),
-        }
-        for npc_id, candidates in aliases.items():
-            if any(candidate in text for candidate in candidates):
-                return npc_id
-        return None
+    def _validate_intent(
+        self,
+        session: GameSession,
+        context: IntentContext,
+        candidate: IntentClassification,
+    ) -> tuple[IntentClassification, bool]:
+        target_valid = candidate.target_npc_id is None or candidate.target_npc_id in session.npcs
+        evidence_valid = candidate.evidence_id is None or candidate.evidence_id in session.evidences
+        location_valid = candidate.location is None or candidate.location in context.available_locations
+        if target_valid and evidence_valid and location_valid:
+            return candidate, False
 
-    def _handle_action(self, session: GameSession, action: str, target_id: str | None, text: str) -> str:
+        self._append_event(
+            session,
+            "Intent Guardrail",
+            "Intent target was outside the current world state; deterministic intent fallback used.",
+            "intent_guardrail",
+        )
+        return self.intent_fallback_provider.classify(context), True
+
+    def _handle_action(self, session: GameSession, intent: IntentClassification, text: str) -> str:
+        action = intent.intent
+        target_id = intent.target_npc_id
         if action == "inspect":
-            return self._inspect_evidence(session, text)
+            return self._inspect_evidence(session, text, intent.evidence_id)
         if action == "show_evidence":
-            return self._show_evidence(session, target_id)
+            return self._show_evidence(session, target_id, intent.evidence_id)
         if action == "ask":
             return self._ask_npc(session, target_id, text)
         if action == "accuse":
@@ -197,15 +228,7 @@ class GameEngine:
             session.incident_status = "MITIGATING"
             return "롤백 지시가 기록되었습니다."
         if action == "move":
-            normalized = text.lower()
-            if "회의" in normalized:
-                session.current_location = "meeting_room"
-            elif any(keyword in normalized for keyword in ("qa", "품질", "테스트")):
-                session.current_location = "qa_desk"
-            elif any(keyword in normalized for keyword in ("pm", "기획", "planner", "플래너")):
-                session.current_location = "pm_desk"
-            else:
-                session.current_location = "dev_area"
+            session.current_location = intent.location or "dev_area"
             location_labels = {
                 "meeting_room": "회의실",
                 "dev_area": "개발 구역",
@@ -225,17 +248,16 @@ class GameEngine:
         self._append_event(session, "Player", f'"{text.strip()}"', "dialogue")
         return "행동이 기록되었습니다. 대상을 명시하면 더 정확한 반응을 얻을 수 있습니다."
 
-    def _inspect_evidence(self, session: GameSession, text: str) -> str:
-        evidence_id = self._evidence_from_text(text) or "release_timeline"
+    def _inspect_evidence(self, session: GameSession, text: str, evidence_id: str | None = None) -> str:
+        evidence_id = evidence_id or self._evidence_from_text(text) or "release_timeline"
         self._discover_evidence(session, evidence_id)
         evidence = session.evidences[evidence_id]
         self._append_event(session, "Player", f"Evidence 확인: {evidence.title}", "evidence")
         return evidence.content
 
-    def _show_evidence(self, session: GameSession, target_id: str | None) -> str:
-        if not session.discovered_evidence:
-            self._discover_evidence(session, "qa_warning_message")
-        evidence_id = next(iter(session.discovered_evidence))
+    def _show_evidence(self, session: GameSession, target_id: str | None, evidence_id: str | None = None) -> str:
+        evidence_id = evidence_id or next(iter(session.discovered_evidence), "qa_warning_message")
+        self._discover_evidence(session, evidence_id)
         evidence = session.evidences[evidence_id]
         target = target_id or "qa_01"
         if target in session.npcs:

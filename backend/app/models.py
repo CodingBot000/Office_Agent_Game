@@ -6,6 +6,21 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+ActionType = Literal[
+    "talk",
+    "ask",
+    "accuse",
+    "defend",
+    "order",
+    "inspect",
+    "show_evidence",
+    "request_evidence",
+    "move",
+    "summon_meeting",
+    "report_conclusion",
+]
+
+
 class Personality(BaseModel):
     assertiveness: int = Field(ge=0, le=100)
     cooperativeness: int = Field(ge=0, le=100)
@@ -89,6 +104,14 @@ class AgentDecision(BaseModel):
     dialogue: str
 
 
+class IntentClassification(BaseModel):
+    intent: ActionType
+    target_npc_id: str | None = None
+    evidence_id: str | None = None
+    location: Literal["meeting_room", "dev_area", "qa_desk", "pm_desk"] | None = None
+    confidence: float = Field(default=0.5, ge=0, le=1)
+
+
 class AgentTrace(BaseModel):
     id: int
     turn: int
@@ -130,6 +153,9 @@ class ActionResponse(BaseModel):
     snapshot: GameSnapshot
     classified_action: str
     message: str
+    intent_provider: Literal["cli", "openai", "deterministic-mock"]
+    intent_confidence: float = Field(ge=0, le=1)
+    intent_fallback_used: bool = False
 
 
 class IncidentReportRequest(BaseModel):

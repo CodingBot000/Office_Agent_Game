@@ -124,4 +124,7 @@ export interface ActionResponse {
   snapshot: GameSnapshot;
   classified_action: string;
   message: string;
+  intent_provider: "cli" | "openai" | "deterministic-mock";
+  intent_confidence: number;
+  intent_fallback_used: boolean;
 }

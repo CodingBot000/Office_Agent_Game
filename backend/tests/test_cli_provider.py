@@ -6,8 +6,8 @@ import pytest
 
 from app.config import Settings
 from app.game.seed import build_initial_npcs, INCIDENT_RULES
-from app.providers.base import DecisionContext, ProviderError
-from app.providers.cli import CliDecisionProvider
+from app.providers.base import DecisionContext, IntentContext, ProviderError
+from app.providers.cli import CliDecisionProvider, CliIntentProvider
 
 
 def make_context() -> DecisionContext:
@@ -75,3 +75,40 @@ def test_cli_provider_raises_on_command_failure(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(ProviderError, match="CLI provider failed"):
         provider.decide(make_context())
+
+
+def test_cli_intent_provider_parses_semantic_intent(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(
+            json.dumps(
+                {
+                    "intent": "ask",
+                    "target_npc_id": "qa_01",
+                    "evidence_id": None,
+                    "location": None,
+                    "confidence": 0.98,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    provider = CliIntentProvider(Settings(ai_provider="cli", ai_cli_model="gpt-5.5"))
+    intent = provider.classify(
+        IntentContext(
+            player_input="상황을 설명해 줘",
+            current_location="qa_desk",
+            available_npcs=("qa_01: QA Engineer (QA Engineer)",),
+            available_npc_ids=("qa_01",),
+            available_evidence_ids=("qa_warning_message",),
+            available_locations=("meeting_room", "dev_area", "qa_desk", "pm_desk"),
+            available_actions=("ask", "move", "inspect"),
+        )
+    )
+
+    assert intent.intent == "ask"
+    assert intent.target_npc_id == "qa_01"
+    assert intent.confidence == 0.98

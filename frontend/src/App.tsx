@@ -13,6 +13,7 @@ const quickCommands = [
 
 function App() {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
+  const [lastIntent, setLastIntent] = useState<ActionResponseMeta | null>(null);
   const [selectedNpcId, setSelectedNpcId] = useState("qa_01");
   const [command, setCommand] = useState("");
   const [primaryCause, setPrimaryCause] = useState("");
@@ -50,6 +51,12 @@ function App() {
     try {
       const response = await submitAction(snapshot.session_id, text.trim());
       setSnapshot(response.snapshot);
+      setLastIntent({
+        action: response.classified_action,
+        provider: response.intent_provider,
+        confidence: response.intent_confidence,
+        fallback: response.intent_fallback_used,
+      });
       setCommand("");
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "명령 처리에 실패했습니다.");
@@ -69,6 +76,7 @@ function App() {
     setError(null);
     try {
       setSnapshot(await resetSession(snapshot.session_id));
+      setLastIntent(null);
       setSelectedNpcId("qa_01");
       setPrimaryCause("");
       setContributingFactors("");
@@ -263,6 +271,12 @@ function App() {
               ))}
             </div>
             {error && <p className="inline-error">{error}</p>}
+            {lastIntent && (
+              <p className="intent-meta">
+                INTENT <strong>{lastIntent.action}</strong> · {lastIntent.provider} · {Math.round(lastIntent.confidence * 100)}% confidence
+                {lastIntent.fallback ? " · fallback" : ""}
+              </p>
+            )}
           </div>
 
           {snapshot.completed && snapshot.result && (
@@ -390,6 +404,13 @@ function InfoBlock({ title, children }: { title: string; children: React.ReactNo
 
 function Score({ label, value }: { label: string; value: number }) {
   return <div className="score"><span>{label}</span><strong>{value}<small>%</small></strong></div>;
+}
+
+interface ActionResponseMeta {
+  action: string;
+  provider: "cli" | "openai" | "deterministic-mock";
+  confidence: number;
+  fallback: boolean;
 }
 
 export default App;

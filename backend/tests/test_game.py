@@ -1,5 +1,14 @@
 from app.game.engine import GameEngine
-from app.models import AgentDecision, IncidentReportRequest
+from app.models import AgentDecision, IncidentReportRequest, IntentClassification
+from app.providers.deterministic import DeterministicDecisionProvider
+
+
+class FixedIntentProvider:
+    name = "cli"
+    model = "gpt-5.5"
+
+    def classify(self, context: object) -> IntentClassification:
+        return IntentClassification(intent="ask", target_npc_id="qa_01", confidence=0.99)
 
 
 def test_session_starts_with_private_npc_knowledge() -> None:
@@ -36,6 +45,21 @@ def test_korean_colloquial_question_reaches_ask_action() -> None:
     response = engine.submit_action(snapshot.session_id, "QA에게 배포전문제가 뭐야?")
 
     assert response.classified_action == "ask"
+    assert "Critical Issue" in response.message
+
+
+def test_engine_uses_semantic_intent_provider_before_game_action() -> None:
+    engine = GameEngine(
+        provider=DeterministicDecisionProvider(),
+        intent_provider=FixedIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "상황을 설명해 줘")
+
+    assert response.classified_action == "ask"
+    assert response.intent_provider == "cli"
+    assert response.intent_confidence == 0.99
     assert "Critical Issue" in response.message
 
 
