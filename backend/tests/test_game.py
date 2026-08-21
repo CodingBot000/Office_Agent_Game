@@ -73,6 +73,21 @@ def test_engine_uses_semantic_intent_provider_before_game_action() -> None:
     assert "Critical Issue" in response.message
 
 
+def test_target_hint_guides_semantic_question_without_changing_player_text() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(
+        snapshot.session_id,
+        "배포전에 무슨 문제가 있던거죠?",
+        target_hint="qa_01",
+    )
+
+    assert response.classified_action == "ask"
+    assert response.snapshot.events[1].message == "배포전에 무슨 문제가 있던거죠?"
+    assert "Critical Issue" in response.message
+
+
 def test_qa_desk_location_button_command_moves_to_qa_desk() -> None:
     engine = GameEngine()
     snapshot = engine.create_session()

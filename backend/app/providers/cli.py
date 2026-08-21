@@ -184,6 +184,7 @@ class CliIntentProvider:
             {
                 "player_input": context.player_input,
                 "current_location": context.current_location,
+                "target_hint": context.target_hint,
                 "available_npcs": context.available_npcs,
                 "available_evidence_ids": context.available_evidence_ids,
                 "available_locations": context.available_locations,
@@ -200,6 +201,8 @@ Markdown, explanations, hidden reasoning, or chain-of-thought.
 Rules:
 - Infer meaning, not just exact keywords. Korean colloquial questions such as '뭐야', '궁금해',
   '설명해줘', and '왜 그래' are ask when the player requests information.
+- target_hint is a non-authoritative UI hint for who the player is addressing; use it when it fits,
+  but still classify the intent from the actual player dialogue.
 - Use only the supplied IDs for target_npc_id and evidence_id.
 - Use location only for move or summon_meeting intents.
 - Choose the closest action from the supplied available_actions.

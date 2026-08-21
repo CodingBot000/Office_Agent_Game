@@ -23,6 +23,7 @@ class DecisionContext:
 class IntentContext:
     player_input: str
     current_location: str
+    target_hint: str | None
     available_npcs: tuple[str, ...]
     available_npc_ids: tuple[str, ...]
     available_evidence_ids: tuple[str, ...]

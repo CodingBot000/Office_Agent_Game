@@ -16,10 +16,14 @@ export function startSession(): Promise<GameSnapshot> {
   return request<GameSnapshot>("/api/v1/sessions", { method: "POST" });
 }
 
-export function submitAction(sessionId: string, text: string, intentHint?: IntentClassification): Promise<ActionResponse> {
+export function submitAction(sessionId: string, text: string, intentHint?: IntentClassification, targetHint?: string | null): Promise<ActionResponse> {
   return request<ActionResponse>(`/api/v1/sessions/${sessionId}/actions`, {
     method: "POST",
-    body: JSON.stringify({ text, ...(intentHint ? { intent_hint: intentHint } : {}) }),
+    body: JSON.stringify({
+      text,
+      ...(intentHint ? { intent_hint: intentHint } : {}),
+      ...(targetHint ? { target_hint: targetHint } : {}),
+    }),
   });
 }
 

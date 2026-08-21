@@ -101,6 +101,7 @@ def test_cli_intent_provider_parses_semantic_intent(monkeypatch: pytest.MonkeyPa
         IntentContext(
             player_input="상황을 설명해 줘",
             current_location="qa_desk",
+            target_hint="qa_01",
             available_npcs=("qa_01: QA Engineer (QA Engineer)",),
             available_npc_ids=("qa_01",),
             available_evidence_ids=("qa_warning_message",),

@@ -10,7 +10,7 @@ class DeterministicIntentProvider:
 
     def classify(self, context: IntentContext) -> IntentClassification:
         normalized = context.player_input.strip().lower()
-        target_npc_id = self._resolve_target(normalized)
+        target_npc_id = context.target_hint or self._resolve_target(normalized)
 
         if any(keyword in normalized for keyword in ("최종 보고", "보고 제출", "report", "결론 제출")):
             return self._result("report_conclusion", target_npc_id, 0.8)

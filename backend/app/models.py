@@ -148,6 +148,7 @@ class GameSnapshot(BaseModel):
 class ActionRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
     intent_hint: IntentClassification | None = None
+    target_hint: str | None = None
 
 
 class ActionResponse(BaseModel):

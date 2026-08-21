@@ -21,7 +21,7 @@ def create_router(engine: GameEngine) -> APIRouter:
     @router.post("/sessions/{session_id}/actions", response_model=ActionResponse)
     def submit_action(session_id: str, request: ActionRequest) -> ActionResponse:
         try:
-            return engine.submit_action(session_id, request.text, request.intent_hint)
+            return engine.submit_action(session_id, request.text, request.intent_hint, request.target_hint)
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
         except InvalidIntentHintError as exc:

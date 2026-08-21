@@ -136,6 +136,8 @@ h1, h2, p { margin: 0; }
 .command-form input::placeholder, .report-form input::placeholder, .report-form textarea::placeholder { color: var(--faint); }
 .command-form button { white-space: nowrap; padding: 8px 11px; }
 .quick-command-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 11px; color: var(--faint); font-size: 9px; }
+.quick-action-row { display: inline-flex; align-items: center; gap: 6px; }
+.quick-target { color: var(--amber); font: 500 9px var(--mono); white-space: nowrap; }
 .quick-command-row button { border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--muted); padding: 2px 0; cursor: pointer; font-size: 10px; }
 .quick-command-row button:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
 .inline-error { margin-top: 10px; color: var(--red); font-size: 11px; }

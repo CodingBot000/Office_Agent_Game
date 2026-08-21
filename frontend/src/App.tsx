@@ -4,17 +4,18 @@ import { resetSession, startSession, submitAction, submitReport } from "./api";
 import type { AgentTrace, GameSnapshot, IntentClassification, NPCState } from "./types";
 
 const quickCommands = [
-  "QA에게 배포 전 문제를 질문한다.",
-  "QA가 장애의 책임자라고 비난한다.",
-  "QA 경고 메시지 기록을 확인한다.",
-  "백엔드에게 QA 증거를 제시한다.",
-  "배포 중단 및 롤백을 지시한다.",
+  { id: "qa-ask", targetLabel: "QA", targetNpcId: "qa_01", dialogue: "배포전에 무슨 문제가 있던거죠?" },
+  { id: "qa-accuse", targetLabel: "QA", targetNpcId: "qa_01", dialogue: "이번 장애의 원인을 어떻게 보고 있나요?" },
+  { id: "qa-evidence", targetLabel: "QA", targetNpcId: "qa_01", dialogue: "배포 전 경고 메시지를 보여줄 수 있나요?" },
+  { id: "backend-evidence", targetLabel: "Backend", targetNpcId: "backend_01", dialogue: "QA 경고 증거를 확인해 주세요." },
+  { id: "rollback", targetLabel: "Team", targetNpcId: null, dialogue: "배포를 중단하고 롤백해 주세요." },
 ];
 
 function App() {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
   const [lastIntent, setLastIntent] = useState<ActionResponseMeta | null>(null);
   const [pendingCommand, setPendingCommand] = useState<PendingCommand | null>(null);
+  const [targetHint, setTargetHint] = useState<string | null>(null);
   const [selectedNpcId, setSelectedNpcId] = useState("qa_01");
   const [command, setCommand] = useState("");
   const [primaryCause, setPrimaryCause] = useState("");
@@ -45,14 +46,14 @@ function App() {
     [selectedNpc?.id, snapshot],
   );
 
-  async function executeCommand(text: string, intentHint?: IntentClassification) {
+  async function executeCommand(text: string, intentHint?: IntentClassification, targetHintOverride?: string | null) {
     if (!snapshot || !text.trim() || submitting || snapshot.completed) return;
     const submittedText = text.trim();
     setSubmitting(true);
     setError(null);
     setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "pending" });
     try {
-      const response = await submitAction(snapshot.session_id, submittedText, intentHint);
+      const response = await submitAction(snapshot.session_id, submittedText, intentHint, targetHintOverride);
       setSnapshot(response.snapshot);
       setPendingCommand(null);
       setLastIntent({
@@ -62,6 +63,7 @@ function App() {
         fallback: response.intent_fallback_used,
       });
       setCommand("");
+      setTargetHint(null);
     } catch (reason: unknown) {
       const message = reason instanceof Error ? reason.message : "명령 처리에 실패했습니다.";
       setError(message);
@@ -73,7 +75,7 @@ function App() {
 
   async function runCommand(event: FormEvent) {
     event.preventDefault();
-    await executeCommand(command);
+    await executeCommand(command, undefined, targetHint);
   }
 
   async function handleReset() {
@@ -84,6 +86,7 @@ function App() {
       setSnapshot(await resetSession(snapshot.session_id));
       setLastIntent(null);
       setPendingCommand(null);
+      setTargetHint(null);
       setSelectedNpcId("qa_01");
       setPrimaryCause("");
       setContributingFactors("");
@@ -277,7 +280,10 @@ function App() {
               <input
                 aria-label="자연어 명령 입력"
                 value={command}
-                onChange={(event) => setCommand(event.target.value)}
+                onChange={(event) => {
+                  setCommand(event.target.value);
+                  setTargetHint(null);
+                }}
                 placeholder="자연어 명령 입력…"
                 disabled={submitting || snapshot.completed}
               />
@@ -288,9 +294,18 @@ function App() {
             <div className="quick-command-row">
               <span>QUICK ACTIONS</span>
               {quickCommands.slice(0, 3).map((quickCommand) => (
-                <button key={quickCommand} type="button" onClick={() => setCommand(quickCommand)}>
-                  {quickCommand.replace(/[.。]/g, "").slice(0, 18)}
-                </button>
+                <div className="quick-action-row" key={quickCommand.id}>
+                  <span className="quick-target">대상 {quickCommand.targetLabel}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCommand(quickCommand.dialogue);
+                      setTargetHint(quickCommand.targetNpcId);
+                    }}
+                  >
+                    {quickCommand.dialogue}
+                  </button>
+                </div>
               ))}
             </div>
             {error && !pendingCommand?.error && <p className="inline-error">{error}</p>}

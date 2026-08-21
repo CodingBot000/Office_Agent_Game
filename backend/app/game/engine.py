@@ -112,6 +112,7 @@ class GameEngine:
         session_id: str,
         text: str,
         intent_hint: IntentClassification | None = None,
+        target_hint: str | None = None,
     ) -> ActionResponse:
         session = self.get_session(session_id)
         if session.completed:
@@ -134,7 +135,9 @@ class GameEngine:
             intent_fallback = False
             intent_provider = "ui"
         else:
-            intent, intent_fallback = self._classify_intent(session, text)
+            if target_hint is not None and target_hint not in session.npcs:
+                raise InvalidIntentHintError("Target hint does not match an NPC in the current session.")
+            intent, intent_fallback = self._classify_intent(session, text, target_hint)
             intent_provider = self.intent_provider.name
         message = self._handle_action(session, intent, text)
         return ActionResponse(
@@ -187,10 +190,16 @@ class GameEngine:
             result=session.result,
         )
 
-    def _classify_intent(self, session: GameSession, text: str) -> tuple[IntentClassification, bool]:
+    def _classify_intent(
+        self,
+        session: GameSession,
+        text: str,
+        target_hint: str | None = None,
+    ) -> tuple[IntentClassification, bool]:
         context = IntentContext(
             player_input=text,
             current_location=session.current_location,
+            target_hint=target_hint,
             available_npcs=tuple(f"{npc.id}: {npc.name} ({npc.role})" for npc in session.npcs.values()),
             available_npc_ids=tuple(session.npcs),
             available_evidence_ids=tuple(session.evidences),
