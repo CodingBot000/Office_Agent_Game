@@ -361,6 +361,62 @@ def test_dialogue_without_knowledge_reference_is_rejected() -> None:
     assert trace.fallback_used is True
 
 
+def test_acknowledgement_without_knowledge_reference_is_allowed() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    backend = session.npcs["backend_01"]
+    decision = AgentDecision(
+        npc_id="backend_01",
+        emotion="neutral",
+        stress_delta=0,
+        trust_delta=0,
+        cooperation_delta=0,
+        grounding_type="acknowledgement",
+        action_type="dialogue",
+        dialogue="네, 방금 공개된 메시지가 확인됩니다.",
+    )
+
+    applied = engine._apply_decision(session, backend, decision, "acknowledgement test")
+
+    trace = session.agent_traces[-1]
+    check = next(item for item in trace.guardrails if item.name == "knowledge_refs_present")
+    assert applied.dialogue == decision.dialogue
+    assert check.passed is True
+    assert trace.fallback_used is False
+
+
+def test_rejected_decision_dialogue_is_not_exposed_to_player() -> None:
+    class MissingReferenceDecisionProvider:
+        name = "cli"
+        model = "gpt-5.6-luna"
+
+        def decide(self, context: object) -> AgentDecision:
+            return AgentDecision(
+                npc_id="qa_01",
+                emotion="guarded",
+                stress_delta=0,
+                trust_delta=0,
+                cooperation_delta=0,
+                grounding_type="fact",
+                action_type="dialogue",
+                dialogue="이 문장은 Guardrail에서 거부되어야 합니다.",
+            )
+
+    engine = GameEngine(
+        provider=MissingReferenceDecisionProvider(),
+        intent_provider=FixedIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "확인되지 않은 사실을 말해줘")
+
+    assert response.message == "현재 질문에 답하기 전에 확인할 수 있는 정보부터 정리하겠습니다."
+    assert response.snapshot.events[-1].message == response.message
+    assert not any("이 문장은 Guardrail" in event.message for event in response.snapshot.events)
+    assert response.snapshot.agent_traces[-1].requested_decision is not None
+    assert response.snapshot.agent_traces[-1].fallback_used is True
+
+
 def test_non_revealable_fact_reference_is_rejected(monkeypatch) -> None:
     private_fact_id = "qa_private_investigation_note"
     monkeypatch.setitem(

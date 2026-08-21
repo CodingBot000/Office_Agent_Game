@@ -238,6 +238,7 @@ class AgentDecision(BaseModel):
     cooperation_delta: int
     belief_updates: list[Belief] = Field(default_factory=list)
     relationship_updates: list[RelationshipUpdate] = Field(default_factory=list)
+    grounding_type: Literal["fact", "belief", "acknowledgement"] = "fact"
     knowledge_refs: list[str] = Field(default_factory=list)
     memory_candidate: Memory | None = None
     action_type: str

@@ -1104,9 +1104,15 @@ class GameEngine:
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "talk", player_input)
-        self._apply_decision(session, npc, decision, f"Player talked to {npc.name}.", provider_fallback)
-        self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
-        return decision.dialogue
+        applied_decision = self._apply_decision(
+            session,
+            npc,
+            decision,
+            f"Player talked to {npc.name}.",
+            provider_fallback,
+        )
+        self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
+        return applied_decision.dialogue
 
     def _ask_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
         target_id = target_id or "qa_01"
@@ -1117,9 +1123,15 @@ class GameEngine:
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "ask", player_input)
-        self._apply_decision(session, npc, decision, f"Player asked {npc.name} about the incident.", provider_fallback)
-        self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
-        return decision.dialogue
+        applied_decision = self._apply_decision(
+            session,
+            npc,
+            decision,
+            f"Player asked {npc.name} about the incident.",
+            provider_fallback,
+        )
+        self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
+        return applied_decision.dialogue
 
     def _accuse_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
         target_id = target_id or "qa_01"
@@ -1130,12 +1142,18 @@ class GameEngine:
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "accuse", player_input)
-        self._apply_decision(session, npc, decision, f"Player accused {npc.name}.", provider_fallback)
-        self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
-        if decision.action_type == "show_evidence" and decision.action_target:
-            self._discover_evidence(session, decision.action_target)
+        applied_decision = self._apply_decision(
+            session,
+            npc,
+            decision,
+            f"Player accused {npc.name}.",
+            provider_fallback,
+        )
+        self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
+        if applied_decision.action_type == "show_evidence" and applied_decision.action_target:
+            self._discover_evidence(session, applied_decision.action_target)
             self._append_event(session, npc.name, "QA Warning evidence를 공개했습니다.", "evidence", npc.id)
-        return decision.dialogue
+        return applied_decision.dialogue
 
     def _defend_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
         target_id = target_id or "qa_01"
@@ -1146,9 +1164,15 @@ class GameEngine:
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "defend", player_input)
-        self._apply_decision(session, npc, decision, f"Player defended {npc.name}.", provider_fallback)
-        self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
-        return decision.dialogue
+        applied_decision = self._apply_decision(
+            session,
+            npc,
+            decision,
+            f"Player defended {npc.name}.",
+            provider_fallback,
+        )
+        self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
+        return applied_decision.dialogue
 
     def _record_dialogue_refusal(self, session: GameSession, npc: NPCState) -> str:
         message = "심각한 갈등 사건이 해결되지 않아 현재 정상적인 대화를 거부합니다. 사과, 피해 복구, 중재가 필요합니다."
@@ -1174,6 +1198,10 @@ class GameEngine:
                 if fact_id in FACT_REGISTRY
             ),
             available_evidence_ids=tuple(session.evidences),
+            recent_events=tuple(
+                f"TURN {event.turn} · {event.actor}: {event.message}"
+                for event in session.events[-8:]
+            ),
             incident_rules=tuple(INCIDENT_RULES),
         )
         try:
@@ -1194,7 +1222,7 @@ class GameEngine:
         decision: AgentDecision,
         event: str,
         provider_fallback: bool = False,
-    ) -> None:
+    ) -> AgentDecision:
         checks = self._validate_decision(session, npc, decision)
         rejected = any(not check.passed for check in checks)
         if rejected:
@@ -1251,6 +1279,7 @@ class GameEngine:
                 fallback_used=provider_fallback or fallback_used,
             )
         )
+        return trace_decision
 
     def _validate_decision(self, session: GameSession, npc: NPCState, decision: AgentDecision) -> list[GuardrailCheck]:
         action_targets = set(session.evidences) | set(session.npcs) | {None}
@@ -1288,8 +1317,8 @@ class GameEngine:
             ),
             GuardrailCheck(
                 name="knowledge_refs_present",
-                passed=bool(decision.knowledge_refs),
-                detail="NPC dialogue decisions include at least one factual grounding reference.",
+                passed=decision.grounding_type != "fact" or bool(decision.knowledge_refs),
+                detail="Fact-grounded dialogue includes a reference; belief and acknowledgement may omit it.",
             ),
             GuardrailCheck(
                 name="knowledge_refs_known_by_npc",
@@ -1320,6 +1349,7 @@ class GameEngine:
             stress_delta=0,
             trust_delta=0,
             cooperation_delta=0,
+            grounding_type="acknowledgement",
             action_type="dialogue",
             dialogue="현재 질문에 답하기 전에 확인할 수 있는 정보부터 정리하겠습니다.",
         )

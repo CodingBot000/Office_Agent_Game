@@ -108,6 +108,7 @@ export interface AgentDecision {
   cooperation_delta: number;
   belief_updates: Belief[];
   relationship_updates: RelationshipUpdate[];
+  grounding_type: "fact" | "belief" | "acknowledgement";
   knowledge_refs: string[];
   memory_candidate: Memory | null;
   action_type: string;

@@ -19,6 +19,7 @@ def make_context() -> DecisionContext:
         target_npc_id="qa_01",
         available_facts=("qa_sent_warning: QA sent a warning message before deployment.",),
         available_evidence_ids=("qa_warning_message",),
+        recent_events=("TURN 1 · Player: 경고 메시지를 보여줄 수 있나요?",),
         incident_rules=tuple(INCIDENT_RULES),
     )
 

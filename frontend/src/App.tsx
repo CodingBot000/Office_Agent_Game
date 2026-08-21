@@ -597,6 +597,7 @@ function AgentInspectorPanel({
       <InfoBlock title="STRUCTURED DECISION">
         <div className="trace-block">
           <div className="trace-line"><span>ACTION</span><b>{latestTrace.decision.action_type}</b></div>
+          <div className="trace-line"><span>GROUNDING</span><b>{latestTrace.decision.grounding_type}</b></div>
           <div className="trace-line"><span>EMOTION</span><b>{latestTrace.decision.emotion}</b></div>
           <div className="trace-line"><span>STRESS DELTA</span><b>{formatDelta(latestTrace.decision.stress_delta)}</b></div>
           <div className="trace-line"><span>TRUST DELTA</span><b>{formatDelta(latestTrace.decision.trust_delta)}</b></div>

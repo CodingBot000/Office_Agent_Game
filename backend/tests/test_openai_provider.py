@@ -98,6 +98,7 @@ def test_openai_decision_provider_validates_response(monkeypatch: pytest.MonkeyP
             target_npc_id="qa_01",
             available_facts=("qa_sent_warning: QA sent a warning message before deployment.",),
             available_evidence_ids=("qa_warning_message",),
+            recent_events=("TURN 1 · Player: 무슨 업무를 맡았나요?",),
             incident_rules=tuple(INCIDENT_RULES),
         )
     )

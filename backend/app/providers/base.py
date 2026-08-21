@@ -17,6 +17,7 @@ class DecisionContext:
     target_npc_id: str
     available_facts: tuple[str, ...]
     available_evidence_ids: tuple[str, ...]
+    recent_events: tuple[str, ...]
     incident_rules: tuple[str, ...]
 
 

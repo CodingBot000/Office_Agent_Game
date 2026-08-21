@@ -35,7 +35,7 @@ def test_openapi_contains_unity_client_contract() -> None:
     assert "known_fact_ids" in npc_state["properties"]
 
     agent_decision = schema["components"]["schemas"]["AgentDecision"]
-    assert "knowledge_refs" in agent_decision["properties"]
+    assert {"grounding_type", "knowledge_refs"}.issubset(agent_decision["properties"])
 
     agent_trace = schema["components"]["schemas"]["AgentTrace"]
     assert {"known_fact_ids", "requested_decision"}.issubset(agent_trace["properties"])
