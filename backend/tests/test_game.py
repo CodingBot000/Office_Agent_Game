@@ -1,0 +1,79 @@
+from app.game.engine import GameEngine
+from app.models import AgentDecision, IncidentReportRequest
+
+
+def test_session_starts_with_private_npc_knowledge() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+
+    qa = next(npc for npc in snapshot.npcs if npc.id == "qa_01")
+    assert snapshot.turn == 0
+    assert qa.known_facts
+    assert "API response schema" not in " ".join(qa.known_facts)
+    assert all(not evidence.discovered for evidence in snapshot.evidences)
+
+
+def test_false_accusation_changes_qa_state_and_reveals_warning() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "QA가 장애의 책임자라고 비난한다.")
+
+    qa = next(npc for npc in response.snapshot.npcs if npc.id == "qa_01")
+    warning = next(evidence for evidence in response.snapshot.evidences if evidence.id == "qa_warning_message")
+    assert response.classified_action == "accuse"
+    assert qa.dynamic_state.emotion == "defensive"
+    assert qa.dynamic_state.trust_toward_player < 15
+    assert qa.important_memories
+    assert warning.discovered is True
+    assert response.snapshot.agent_traces[-1].fallback_used is False
+
+
+def test_evidence_propagates_to_backend_belief() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+    engine.submit_action(snapshot.session_id, "QA에게 경고 메시지 기록을 확인한다.")
+
+    response = engine.submit_action(snapshot.session_id, "백엔드에게 QA 증거를 제시한다.")
+    backend = next(npc for npc in response.snapshot.npcs if npc.id == "backend_01")
+    assert any("ignored QA warning" in belief.belief for belief in backend.beliefs)
+
+
+def test_invalid_agent_action_is_rejected_with_fallback() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    qa = session.npcs["qa_01"]
+    invalid = AgentDecision(
+        npc_id="qa_01",
+        emotion="defensive",
+        stress_delta=0,
+        trust_delta=0,
+        cooperation_delta=0,
+        action_type="show_evidence",
+        action_target="missing_evidence_999",
+        dialogue="invalid",
+    )
+    engine._apply_decision(session, qa, invalid, "invalid test event")
+
+    trace = session.agent_traces[-1]
+    assert trace.fallback_used is True
+    assert trace.decision.action_type == "dialogue"
+    assert any(not check.passed for check in trace.guardrails)
+
+
+def test_report_ends_session_with_result() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+    engine.submit_action(snapshot.session_id, "QA 경고 메시지 기록을 조사한다.")
+
+    result = engine.submit_report(
+        snapshot.session_id,
+        IncidentReportRequest(
+            primary_cause="API schema 변경이 QA 검증 전에 배포되었습니다.",
+            contributing_factors=["schedule pressure", "communication failure"],
+        ),
+    )
+    assert result.completed is True
+    assert result.incident_status == "RESOLVED"
+    assert result.result is not None
+    assert result.result.incident_diagnosis >= 85

@@ -1,0 +1,29 @@
+# Dependencies and build output
+node_modules/
+frontend/dist/
+backend/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local configuration and runtime data
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# The planning documents are local working notes and must not be committed.
+docs/
+
+# Tool caches
+.vite/
+coverage/
