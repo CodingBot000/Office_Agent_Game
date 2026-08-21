@@ -116,6 +116,8 @@ class RelationshipState(BaseModel):
     fear: int = Field(default=0, ge=0, le=100)
     grievance: int = Field(default=0, ge=0, le=100)
     repair_stage: Literal["none", "acknowledged", "apologized", "repaired", "mediated"] = "none"
+    trust_ceiling: int | None = Field(default=None, ge=-100, le=100)
+    fear_floor: int = Field(default=0, ge=0, le=100)
     last_changed_turn: int = 0
 
 
@@ -175,12 +177,17 @@ class WorldEvent(BaseModel):
     detail: str
 
 
+class MemoryEffect(BaseModel):
+    npc_id: str
+    memory: Memory
+
+
 class SocialPolicyOutcome(BaseModel):
     conduct_level: Literal["permitted", "inappropriate", "misconduct", "severe_misconduct"]
     relationship_effects: list[RelationshipEffect] = Field(default_factory=list)
     emotion_effects: list[EmotionEffect] = Field(default_factory=list)
     mandatory_world_events: list[WorldEvent] = Field(default_factory=list)
-    memory_candidates: list[Memory] = Field(default_factory=list)
+    memory_effects: list[MemoryEffect] = Field(default_factory=list)
     applied_modifiers: list[PolicyModifier] = Field(default_factory=list)
 
 
@@ -305,6 +312,7 @@ class GameSnapshot(BaseModel):
     relationships: list[RelationshipState]
     world_objects: list[WorldObjectState]
     social_events: list[SocialEventTrace]
+    dialogue_refused_npc_ids: list[str]
     evidences: list[Evidence]
     events: list[EventLogEntry]
     agent_traces: list[AgentTrace]

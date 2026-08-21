@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.models import AgentDecision, IntentClassification, NPCState
+from app.models import AgentDecision, IntentClassification, NPCState, SocialImpactClassification
 
 
 class ProviderError(RuntimeError):
@@ -32,6 +32,18 @@ class IntentContext:
     available_actions: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SocialImpactContext:
+    player_input: str
+    current_location: str
+    target_hint: str | None
+    available_npcs: tuple[str, ...]
+    available_npc_ids: tuple[str, ...]
+    available_objects: tuple[str, ...]
+    available_object_ids: tuple[str, ...]
+    recent_social_events: tuple[str, ...]
+
+
 class AgentProvider(Protocol):
     name: str
     model: str
@@ -46,3 +58,11 @@ class IntentProvider(Protocol):
 
     def classify(self, context: IntentContext) -> IntentClassification:
         """Return one schema-validated player intent candidate."""
+
+
+class SocialImpactProvider(Protocol):
+    name: str
+    model: str
+
+    def classify_social_impact(self, context: SocialImpactContext) -> SocialImpactClassification:
+        """Return one schema-validated social impact candidate without relationship deltas."""

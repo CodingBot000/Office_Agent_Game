@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from app.models import AgentDecision
-from app.providers.base import DecisionContext, IntentContext
+from app.providers.base import DecisionContext, IntentContext, SocialImpactContext
 
 
 def strict_schema(schema: dict[str, object]) -> dict[str, object]:
@@ -102,5 +102,40 @@ Rules:
 - Never invent a target, evidence, location, or action.
 
 Current context:
+{context_json}
+"""
+
+
+def build_social_impact_prompt(context: SocialImpactContext) -> str:
+    context_json = json.dumps(
+        {
+            "player_input": context.player_input,
+            "current_location": context.current_location,
+            "target_hint": context.target_hint,
+            "available_npcs": context.available_npcs,
+            "available_npc_ids": context.available_npc_ids,
+            "available_objects": context.available_objects,
+            "available_object_ids": context.available_object_ids,
+            "recent_social_events": context.recent_social_events,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    return f"""You classify the social impact of one player action in an office simulation.
+
+Return only one JSON object matching the supplied SocialImpactClassification schema. Do not return
+Markdown, explanations, hidden reasoning, chain-of-thought, or relationship score changes.
+
+Rules:
+- Classify meaning, including unfamiliar paraphrases, rather than matching exact keywords.
+- Use only supplied NPC and object IDs. Never invent an entity or object.
+- target_hint is non-authoritative; use it only when the text refers to that selected person.
+- Choose one primary action_family. Use reason_codes for additional dimensions.
+- Snatching an object is property_interference. Throwing or breaking it is property_aggression.
+- Yelling or coercive scolding is verbal_pressure; personal degradation is insult or public_humiliation.
+- severity is 1..5. Property aggression, direct threats, and physical aggression should normally be 3..5.
+- Do not decide witnesses, relationship deltas, emotions, punishment, or world-state consequences.
+
+Current social impact context:
 {context_json}
 """

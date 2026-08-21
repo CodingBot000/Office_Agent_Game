@@ -6,8 +6,8 @@ import pytest
 
 from app.config import Settings
 from app.game.seed import INCIDENT_RULES, build_initial_npcs
-from app.providers.base import DecisionContext, IntentContext, ProviderError
-from app.providers.openai import OpenAIDecisionProvider, OpenAIIntentProvider
+from app.providers.base import DecisionContext, IntentContext, ProviderError, SocialImpactContext
+from app.providers.openai import OpenAIDecisionProvider, OpenAIIntentProvider, OpenAISocialImpactProvider
 
 
 def fake_api_response(structured_payload: dict[str, object]) -> io.BytesIO:
@@ -108,3 +108,44 @@ def test_openai_decision_provider_validates_response(monkeypatch: pytest.MonkeyP
 def test_openai_provider_requires_api_key() -> None:
     with pytest.raises(ProviderError, match="OPENAI_API_KEY"):
         OpenAIIntentProvider(Settings(ai_provider="openai", openai_api_key=""))
+
+
+def test_openai_social_impact_provider_uses_responses_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: urllib.request.Request, timeout: int):
+        captured["payload"] = json.loads(request.data)
+        return fake_api_response(
+            {
+                "action_family": "verbal_pressure",
+                "direct_target_ids": ["qa_01"],
+                "affected_target_ids": [],
+                "object_id": None,
+                "severity": 3,
+                "intentionality": "deliberate",
+                "observable": True,
+                "evidence_based": False,
+                "reason_codes": ["coercion"],
+                "confidence": 0.94,
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    provider = OpenAISocialImpactProvider(
+        Settings(ai_provider="openai", openai_api_key="test-key", openai_model="gpt-5.4-nano")
+    )
+    impact = provider.classify_social_impact(
+        SocialImpactContext(
+            player_input="QA에게 당장 답하라고 윽박지른다.",
+            current_location="qa_desk",
+            target_hint="qa_01",
+            available_npcs=("qa_01: QA Engineer",),
+            available_npc_ids=("qa_01",),
+            available_objects=("qa_keyboard: QA keyboard",),
+            available_object_ids=("qa_keyboard",),
+            recent_social_events=(),
+        )
+    )
+
+    assert impact.action_family == "verbal_pressure"
+    assert captured["payload"]["text"]["format"]["name"] == "socialimpactclassification"

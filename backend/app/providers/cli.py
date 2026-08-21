@@ -10,9 +10,15 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings
-from app.models import AgentDecision, IntentClassification
-from app.providers.base import DecisionContext, IntentContext, ProviderError
-from app.providers.structured import build_decision_prompt, build_intent_prompt, normalize_decision, strict_schema
+from app.models import AgentDecision, IntentClassification, SocialImpactClassification
+from app.providers.base import DecisionContext, IntentContext, ProviderError, SocialImpactContext
+from app.providers.structured import (
+    build_decision_prompt,
+    build_intent_prompt,
+    build_social_impact_prompt,
+    normalize_decision,
+    strict_schema,
+)
 
 
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
@@ -117,3 +123,14 @@ class CliIntentProvider:
 
     def classify(self, context: IntentContext) -> IntentClassification:
         return self.executor.run(IntentClassification, build_intent_prompt(context))
+
+
+class CliSocialImpactProvider:
+    name = "cli"
+
+    def __init__(self, settings: Settings) -> None:
+        self.model = settings.ai_cli_model
+        self.executor = CliStructuredExecutor(settings, self.model)
+
+    def classify_social_impact(self, context: SocialImpactContext) -> SocialImpactClassification:
+        return self.executor.run(SocialImpactClassification, build_social_impact_prompt(context))

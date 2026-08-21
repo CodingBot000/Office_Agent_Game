@@ -6,8 +6,8 @@ import pytest
 
 from app.config import Settings
 from app.game.seed import build_initial_npcs, INCIDENT_RULES
-from app.providers.base import DecisionContext, IntentContext, ProviderError
-from app.providers.cli import CliDecisionProvider, CliIntentProvider
+from app.providers.base import DecisionContext, IntentContext, ProviderError, SocialImpactContext
+from app.providers.cli import CliDecisionProvider, CliIntentProvider, CliSocialImpactProvider
 
 
 def make_context() -> DecisionContext:
@@ -114,3 +114,46 @@ def test_cli_intent_provider_parses_semantic_intent(monkeypatch: pytest.MonkeyPa
     assert intent.intent == "ask"
     assert intent.target_npc_id == "qa_01"
     assert intent.confidence == 0.98
+
+
+def test_cli_social_impact_provider_uses_structured_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(
+            json.dumps(
+                {
+                    "action_family": "property_aggression",
+                    "direct_target_ids": ["qa_01"],
+                    "affected_target_ids": [],
+                    "object_id": "qa_keyboard",
+                    "severity": 4,
+                    "intentionality": "deliberate",
+                    "observable": True,
+                    "evidence_based": False,
+                    "reason_codes": ["property_violation", "property_damage", "physical_danger"],
+                    "confidence": 0.96,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    provider = CliSocialImpactProvider(Settings(ai_provider="cli", ai_cli_model="gpt-5.6-luna"))
+    impact = provider.classify_social_impact(
+        SocialImpactContext(
+            player_input="QA의 키보드를 빼앗아 던진다.",
+            current_location="qa_desk",
+            target_hint="qa_01",
+            available_npcs=("qa_01: QA Engineer",),
+            available_npc_ids=("qa_01",),
+            available_objects=("qa_keyboard: QA keyboard",),
+            available_object_ids=("qa_keyboard",),
+            recent_social_events=(),
+        )
+    )
+
+    assert impact.action_family == "property_aggression"
+    assert impact.object_id == "qa_keyboard"
+    assert impact.severity == 4

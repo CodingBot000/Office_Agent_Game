@@ -20,6 +20,14 @@ from app.game.seed import (
     clone_world_objects,
     relationship_key,
 )
+from app.game.relationship_policy import RelationshipPolicyEngine
+from app.game.seed import NPC_HOME_LOCATIONS
+from app.game.social_rules import (
+    BASE_RELATIONSHIP_IMPACTS,
+    HARMFUL_ACTION_FAMILIES,
+    RECOVERY_ACTION_FAMILIES,
+    SEVERITY_RANGES,
+)
 from app.models import (
     ActionResponse,
     ActionType,
@@ -41,10 +49,27 @@ from app.models import (
     RelationshipState,
     RelationshipUpdate,
     SocialEventTrace,
+    SocialImpactClassification,
+    SocialPolicyOutcome,
     WorldObjectState,
 )
-from app.providers import AgentProvider, DecisionContext, IntentContext, IntentProvider, ProviderError, create_intent_provider, create_provider
-from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
+from app.providers import (
+    AgentProvider,
+    DecisionContext,
+    IntentContext,
+    IntentProvider,
+    ProviderError,
+    SocialImpactContext,
+    SocialImpactProvider,
+    create_intent_provider,
+    create_provider,
+    create_social_impact_provider,
+)
+from app.providers.deterministic import (
+    DeterministicDecisionProvider,
+    DeterministicIntentProvider,
+    DeterministicSocialImpactProvider,
+)
 from app.storage import SessionRepository, create_session_repository
 
 
@@ -75,6 +100,7 @@ class GameSession:
     relationships: dict[str, RelationshipState] = field(default_factory=clone_relationships)
     world_objects: dict[str, WorldObjectState] = field(default_factory=clone_world_objects)
     social_events: list[SocialEventTrace] = field(default_factory=list)
+    dialogue_refused_npc_ids: set[str] = field(default_factory=set)
     evidences: dict[str, Evidence] = field(default_factory=clone_evidence)
     events: list[EventLogEntry] = field(default_factory=list)
     agent_traces: list[AgentTrace] = field(default_factory=list)
@@ -100,6 +126,7 @@ class GameEngine:
         self,
         provider: AgentProvider | None = None,
         intent_provider: IntentProvider | None = None,
+        social_impact_provider: SocialImpactProvider | None = None,
         settings: Settings | None = None,
         session_repository: SessionRepository | None = None,
     ) -> None:
@@ -107,8 +134,11 @@ class GameEngine:
         self.session_repository = session_repository or create_session_repository(self.settings)
         self.provider = provider or create_provider(self.settings)
         self.intent_provider = intent_provider or create_intent_provider(self.settings)
+        self.social_impact_provider = social_impact_provider or create_social_impact_provider(self.settings)
         self.fallback_provider = DeterministicDecisionProvider()
         self.intent_fallback_provider = DeterministicIntentProvider()
+        self.social_impact_fallback_provider = DeterministicSocialImpactProvider()
+        self.relationship_policy = RelationshipPolicyEngine()
 
     def create_session(self) -> GameSnapshot:
         session = GameSession(session_id=str(uuid4()))
@@ -163,6 +193,11 @@ class GameEngine:
             intent, intent_fallback = self._classify_intent(session, text, target_hint)
             intent_provider = self.intent_provider.name
         message = self._handle_action(session, intent, text)
+        social_trace = (
+            session.social_events[-1]
+            if session.social_events and session.social_events[-1].turn == session.turn
+            else None
+        )
         self._save_session(session)
         return ActionResponse(
             snapshot=self.snapshot(session),
@@ -171,6 +206,8 @@ class GameEngine:
             intent_provider=intent_provider,
             intent_confidence=intent.confidence,
             intent_fallback_used=intent_fallback,
+            social_impact_provider=social_trace.provider if social_trace else None,
+            social_impact_fallback_used=social_trace.fallback_used if social_trace else False,
         )
 
     def submit_report(self, session_id: str, report: IncidentReportRequest) -> GameSnapshot:
@@ -210,6 +247,7 @@ class GameEngine:
             relationships=list(session.relationships.values()),
             world_objects=list(session.world_objects.values()),
             social_events=session.social_events[-20:],
+            dialogue_refused_npc_ids=sorted(session.dialogue_refused_npc_ids),
             evidences=visible_evidence,
             events=session.events[-50:],
             agent_traces=session.agent_traces[-20:],
@@ -240,6 +278,7 @@ class GameEngine:
                 for object_id, world_object in session.world_objects.items()
             },
             "social_events": [event.model_dump(mode="json") for event in session.social_events],
+            "dialogue_refused_npc_ids": sorted(session.dialogue_refused_npc_ids),
             "evidences": {evidence_id: evidence.model_dump(mode="json") for evidence_id, evidence in session.evidences.items()},
             "events": [event.model_dump(mode="json") for event in session.events],
             "agent_traces": [trace.model_dump(mode="json") for trace in session.agent_traces],
@@ -298,6 +337,7 @@ class GameEngine:
                 for object_id, world_object in build_initial_world_objects().items()
             }
             payload["social_events"] = []
+            payload["dialogue_refused_npc_ids"] = []
         payload["schema_version"] = CURRENT_SESSION_SCHEMA_VERSION
         return payload, True
 
@@ -322,6 +362,7 @@ class GameEngine:
                 for object_id, world_object in dict(world_object_payload).items()
             },
             social_events=[SocialEventTrace.model_validate(event) for event in payload.get("social_events", [])],
+            dialogue_refused_npc_ids={str(item) for item in payload.get("dialogue_refused_npc_ids", [])},
             evidences={
                 str(evidence_id): Evidence.model_validate(evidence)
                 for evidence_id, evidence in dict(evidence_payload).items()
@@ -420,12 +461,505 @@ class GameEngine:
             "move": lambda: self._handle_move(session, intent.location),
             "summon_meeting": lambda: self._handle_summon_meeting(session),
             "report_conclusion": lambda: self._handle_report_prompt(session),
-            "social_action": lambda: self._handle_social_action_placeholder(session),
+            "social_action": lambda: self._handle_social_action(session, target_id, text),
         }
 
-    def _handle_social_action_placeholder(self, session: GameSession) -> str:
-        self._append_event(session, "System", "사회적 행동 정책을 적용할 수 없습니다.", "guardrail")
-        return "사회적 행동 정책을 적용할 수 없습니다."
+    def _handle_social_action(self, session: GameSession, target_id: str | None, text: str) -> str:
+        context = self._social_impact_context(session, text, target_id)
+        requested_classification: SocialImpactClassification | None = None
+        try:
+            classification = self.social_impact_provider.classify_social_impact(context)
+            provider_fallback = False
+        except ProviderError as exc:
+            self._record_fallback(
+                session,
+                stage="social_impact_provider",
+                provider=self.social_impact_provider.name,
+                reason=str(exc),
+            )
+            classification = self.social_impact_fallback_provider.classify_social_impact(context)
+            provider_fallback = True
+
+        guardrails = self._validate_social_classification(session, context, classification)
+        fallback_used = provider_fallback
+        if any(not check.passed for check in guardrails):
+            requested_classification = classification
+            failed_checks = ", ".join(check.name for check in guardrails if not check.passed)
+            self._record_fallback(
+                session,
+                stage="social_impact_guardrail",
+                provider=self.social_impact_provider.name,
+                reason=f"Social impact guardrail rejected: {failed_checks}",
+            )
+            classification = self.social_impact_fallback_provider.classify_social_impact(context)
+            fallback_checks = self._validate_social_classification(session, context, classification)
+            fallback_valid = all(check.passed for check in fallback_checks)
+            guardrails.extend(
+                [
+                    GuardrailCheck(
+                        name="fallback_classification_valid",
+                        passed=fallback_valid,
+                        detail="Deterministic fallback classification stays inside the current world state.",
+                    )
+                ]
+            )
+            fallback_used = True
+            if not fallback_valid:
+                outcome = SocialPolicyOutcome(conduct_level="inappropriate")
+                return self._record_social_trace_and_message(
+                    session,
+                    text,
+                    classification,
+                    requested_classification,
+                    outcome,
+                    guardrails,
+                    fallback_used,
+                    "행동 대상이나 물건을 현재 위치에서 확인할 수 없어 관계 변화를 적용하지 않았습니다.",
+                )
+
+        direct_target_ids = list(dict.fromkeys(classification.direct_target_ids))
+        affected_target_ids = [
+            npc_id
+            for npc_id in dict.fromkeys(classification.affected_target_ids)
+            if npc_id not in direct_target_ids
+        ]
+        object_owner_id = (
+            session.world_objects[classification.object_id].owner_id
+            if classification.object_id in session.world_objects
+            else None
+        )
+        witness_ids = self._derive_witnesses(
+            session,
+            classification,
+            direct_target_ids,
+            affected_target_ids,
+            object_owner_id,
+        )
+        repeated = self._is_repeated_social_action(session, classification)
+        outcome = self.relationship_policy.evaluate(
+            classification,
+            actor_id="player",
+            direct_target_ids=direct_target_ids,
+            affected_target_ids=affected_target_ids,
+            object_owner_id=object_owner_id,
+            witness_ids=witness_ids,
+            repeated=repeated,
+            power_abuse="power_abuse" in classification.reason_codes,
+            turn=session.turn,
+        )
+        outcome_checks = self._validate_social_outcome(classification, outcome)
+        guardrails.extend(outcome_checks)
+        if any(not check.passed for check in outcome_checks):
+            failed_checks = ", ".join(check.name for check in outcome_checks if not check.passed)
+            self._record_fallback(
+                session,
+                stage="social_impact_guardrail",
+                provider=self.social_impact_provider.name,
+                reason=f"Relationship policy guardrail rejected: {failed_checks}",
+            )
+            outcome = SocialPolicyOutcome(conduct_level="inappropriate")
+            fallback_used = True
+        else:
+            self._apply_social_outcome(session, classification, outcome)
+
+        return self._record_social_trace_and_message(
+            session,
+            text,
+            classification,
+            requested_classification,
+            outcome,
+            guardrails,
+            fallback_used,
+            self._social_action_message(session, classification, outcome),
+        )
+
+    def _social_impact_context(
+        self,
+        session: GameSession,
+        text: str,
+        target_hint: str | None,
+    ) -> SocialImpactContext:
+        available_npc_ids = self._npc_ids_at_location(session)
+        available_objects = [
+            world_object
+            for world_object in session.world_objects.values()
+            if world_object.location == session.current_location or world_object.holder_id == "player"
+        ]
+        return SocialImpactContext(
+            player_input=text,
+            current_location=session.current_location,
+            target_hint=target_hint,
+            available_npcs=tuple(
+                f"{npc_id}: {session.npcs[npc_id].name} ({session.npcs[npc_id].role})"
+                for npc_id in available_npc_ids
+            ),
+            available_npc_ids=tuple(available_npc_ids),
+            available_objects=tuple(
+                f"{item.id}: {item.name} (owner={item.owner_id or 'shared'}, condition={item.condition})"
+                for item in available_objects
+            ),
+            available_object_ids=tuple(item.id for item in available_objects),
+            recent_social_events=tuple(
+                f"{event.classification.action_family}: {','.join(event.classification.direct_target_ids)}"
+                for event in session.social_events[-3:]
+            ),
+        )
+
+    def _npc_ids_at_location(self, session: GameSession) -> list[str]:
+        if session.current_location == "meeting_room":
+            return list(session.npcs)
+        return [
+            npc_id
+            for npc_id in session.npcs
+            if NPC_HOME_LOCATIONS.get(npc_id) == session.current_location
+        ]
+
+    def _validate_social_classification(
+        self,
+        session: GameSession,
+        context: SocialImpactContext,
+        classification: SocialImpactClassification,
+    ) -> list[GuardrailCheck]:
+        target_ids = [*classification.direct_target_ids, *classification.affected_target_ids]
+        target_set = set(target_ids)
+        accessible_targets = set(context.available_npc_ids)
+        object_state = session.world_objects.get(classification.object_id or "")
+        object_accessible = classification.object_id is None or classification.object_id in context.available_object_ids
+        property_action = classification.action_family in {"property_interference", "property_aggression"}
+        object_action_possible = True
+        if property_action and object_state is not None:
+            object_action_possible = object_state.condition != "destroyed"
+            if classification.action_family == "property_interference":
+                object_action_possible = object_action_possible and object_state.portable
+            else:
+                object_action_possible = object_action_possible and object_state.destructible
+        severity_min, severity_max = SEVERITY_RANGES[classification.action_family]
+        recovery_valid = self._recovery_transition_valid(session, classification)
+        return [
+            GuardrailCheck(
+                name="action_family_allowed",
+                passed=classification.action_family in BASE_RELATIONSHIP_IMPACTS,
+                detail="Action family exists in the server-owned social policy vocabulary.",
+            ),
+            GuardrailCheck(
+                name="severity_valid_for_action",
+                passed=severity_min <= classification.severity <= severity_max,
+                detail=f"Severity is inside the policy range {severity_min}..{severity_max}.",
+            ),
+            GuardrailCheck(
+                name="targets_exist",
+                passed=bool(classification.direct_target_ids) and all(npc_id in session.npcs for npc_id in target_set),
+                detail="Social action has at least one direct target and all targets exist.",
+            ),
+            GuardrailCheck(
+                name="targets_accessible",
+                passed=target_set.issubset(accessible_targets),
+                detail="All social-action targets are present at the player's current location.",
+            ),
+            GuardrailCheck(
+                name="object_exists",
+                passed=classification.object_id is None or object_state is not None,
+                detail="Referenced object exists in the server-owned World Object Registry.",
+            ),
+            GuardrailCheck(
+                name="object_accessible",
+                passed=object_accessible,
+                detail="Referenced object is at the current location or held by the player.",
+            ),
+            GuardrailCheck(
+                name="object_required_for_action",
+                passed=not property_action or object_state is not None,
+                detail="Property actions reference a concrete world object.",
+            ),
+            GuardrailCheck(
+                name="object_action_possible",
+                passed=object_action_possible,
+                detail="Object state supports the requested interaction.",
+            ),
+            GuardrailCheck(
+                name="relationship_edges_exist",
+                passed=all(relationship_key(npc_id, "player") in session.relationships for npc_id in target_set),
+                detail="Every affected NPC has a directional relationship toward the player.",
+            ),
+            GuardrailCheck(
+                name="recovery_stage_transition_valid",
+                passed=recovery_valid,
+                detail="Apology, repair, and mediation follow the server-owned recovery sequence.",
+            ),
+        ]
+
+    def _recovery_transition_valid(
+        self,
+        session: GameSession,
+        classification: SocialImpactClassification,
+    ) -> bool:
+        if classification.action_family not in RECOVERY_ACTION_FAMILIES:
+            return True
+        relationships = [
+            session.relationships[relationship_key(npc_id, "player")]
+            for npc_id in classification.direct_target_ids
+            if relationship_key(npc_id, "player") in session.relationships
+        ]
+        if not relationships:
+            return False
+        if classification.action_family == "apology":
+            return all(edge.repair_stage in {"none", "acknowledged", "apologized"} for edge in relationships)
+        if classification.action_family == "repair_action":
+            return all(edge.repair_stage == "apologized" for edge in relationships)
+        return all(edge.repair_stage == "repaired" for edge in relationships)
+
+    def _derive_witnesses(
+        self,
+        session: GameSession,
+        classification: SocialImpactClassification,
+        direct_target_ids: list[str],
+        affected_target_ids: list[str],
+        object_owner_id: str | None,
+    ) -> list[str]:
+        if not classification.observable:
+            return []
+        participants = {*direct_target_ids, *affected_target_ids}
+        if object_owner_id:
+            participants.add(object_owner_id)
+        return [npc_id for npc_id in self._npc_ids_at_location(session) if npc_id not in participants]
+
+    def _is_repeated_social_action(
+        self,
+        session: GameSession,
+        classification: SocialImpactClassification,
+    ) -> bool:
+        if not session.social_events:
+            return False
+        previous = session.social_events[-1].classification
+        return (
+            previous.action_family == classification.action_family
+            and bool(set(previous.direct_target_ids) & set(classification.direct_target_ids))
+        )
+
+    def _validate_social_outcome(
+        self,
+        classification: SocialImpactClassification,
+        outcome: SocialPolicyOutcome,
+    ) -> list[GuardrailCheck]:
+        harmful = classification.action_family in HARMFUL_ACTION_FAMILIES
+        direction_valid = not harmful or all(
+            effect.trust_delta <= 0
+            and effect.tension_delta >= 0
+            and effect.respect_delta <= 0
+            and effect.fear_delta >= 0
+            and effect.grievance_delta >= 0
+            for effect in outcome.relationship_effects
+        )
+        delta_valid = all(
+            abs(value) <= 60
+            for effect in outcome.relationship_effects
+            for value in (
+                effect.trust_delta,
+                effect.tension_delta,
+                effect.respect_delta,
+                effect.fear_delta,
+                effect.grievance_delta,
+            )
+        )
+        event_types = {event.event_type for event in outcome.mandatory_world_events}
+        mandatory_valid = True
+        if classification.action_family == "property_aggression":
+            mandatory_valid = "object_damaged" in event_types
+        if classification.action_family == "physical_assault":
+            mandatory_valid = {"security_called", "dialogue_refused"}.issubset(event_types)
+        direct_magnitude = max(
+            (
+                abs(effect.trust_delta)
+                for effect in outcome.relationship_effects
+                if "direct" in effect.reason_codes
+            ),
+            default=0,
+        )
+        witness_bounded = all(
+            abs(effect.trust_delta) <= direct_magnitude
+            for effect in outcome.relationship_effects
+            if "witness" in effect.reason_codes
+        )
+        return [
+            GuardrailCheck(
+                name="policy_direction_valid",
+                passed=direction_valid,
+                detail="Harmful actions cannot improve trust/respect or reduce tension/fear/grievance.",
+            ),
+            GuardrailCheck(
+                name="policy_delta_within_envelope",
+                passed=delta_valid,
+                detail="Relationship deltas stay inside the server-owned per-event envelope.",
+            ),
+            GuardrailCheck(
+                name="mandatory_consequences_present",
+                passed=mandatory_valid,
+                detail="Severe actions include their mandatory world-state consequences.",
+            ),
+            GuardrailCheck(
+                name="witness_impact_bounded",
+                passed=witness_bounded,
+                detail="Witness impact does not exceed direct-target impact.",
+            ),
+        ]
+
+    def _apply_social_outcome(
+        self,
+        session: GameSession,
+        classification: SocialImpactClassification,
+        outcome: SocialPolicyOutcome,
+    ) -> None:
+        harmful = classification.action_family in HARMFUL_ACTION_FAMILIES
+        for effect in outcome.relationship_effects:
+            edge_id = relationship_key(effect.source_id, effect.target_id)
+            edge = session.relationships[edge_id]
+            repair_stage = edge.repair_stage
+            trust_ceiling = edge.trust_ceiling
+            fear_floor = edge.fear_floor
+            direct_or_owner = "direct" in effect.reason_codes or "owner" in effect.reason_codes
+            if harmful and classification.severity >= 4 and direct_or_owner:
+                repair_stage = "none"
+                trust_ceiling = 20
+                fear_floor = max(20, fear_floor)
+            elif classification.action_family == "apology":
+                repair_stage = "apologized"
+            elif classification.action_family == "repair_action":
+                repair_stage = "repaired"
+            elif classification.action_family == "mediation":
+                repair_stage = "mediated"
+                trust_ceiling = None
+                fear_floor = 0
+
+            trust = max(-100, min(100, edge.trust + effect.trust_delta))
+            if trust_ceiling is not None:
+                trust = min(trust, trust_ceiling)
+            fear = max(fear_floor, min(100, edge.fear + effect.fear_delta))
+            updated = edge.model_copy(
+                update={
+                    "trust": trust,
+                    "tension": max(0, min(100, edge.tension + effect.tension_delta)),
+                    "respect": max(-100, min(100, edge.respect + effect.respect_delta)),
+                    "fear": fear,
+                    "grievance": max(0, min(100, edge.grievance + effect.grievance_delta)),
+                    "repair_stage": repair_stage,
+                    "trust_ceiling": trust_ceiling,
+                    "fear_floor": fear_floor,
+                    "last_changed_turn": session.turn,
+                }
+            )
+            session.relationships[edge_id] = updated
+            if effect.source_id in session.npcs and effect.target_id == "player":
+                npc = session.npcs[effect.source_id]
+                npc.dynamic_state = npc.dynamic_state.model_copy(update={"trust_toward_player": updated.trust})
+
+        for effect in outcome.emotion_effects:
+            npc = session.npcs[effect.npc_id]
+            npc.dynamic_state = npc.dynamic_state.model_copy(
+                update={
+                    "emotion": effect.emotion,
+                    "stress": max(0, min(100, npc.dynamic_state.stress + effect.stress_delta)),
+                    "cooperation": max(0, min(100, npc.dynamic_state.cooperation + effect.cooperation_delta)),
+                }
+            )
+
+        for memory_effect in outcome.memory_effects:
+            npc = session.npcs[memory_effect.npc_id]
+            duplicate = any(
+                memory.summary.casefold() == memory_effect.memory.summary.casefold()
+                for memory in (*npc.recent_memories, *npc.important_memories)
+            )
+            if not duplicate:
+                npc.recent_memories.append(memory_effect.memory)
+                if memory_effect.memory.importance >= 0.75:
+                    npc.important_memories.append(memory_effect.memory)
+            npc.recent_memories = npc.recent_memories[-8:]
+            npc.important_memories = npc.important_memories[-8:]
+
+        direct_targets = set(classification.direct_target_ids)
+        for world_event in outcome.mandatory_world_events:
+            if world_event.event_type == "object_damaged" and world_event.target_id in session.world_objects:
+                world_object = session.world_objects[world_event.target_id]
+                next_condition = "destroyed" if world_object.condition == "damaged" else "damaged"
+                session.world_objects[world_event.target_id] = world_object.model_copy(
+                    update={"condition": next_condition, "holder_id": None}
+                )
+            elif world_event.event_type == "security_called":
+                session.incident_status = "SECURITY_ESCALATED"
+            elif world_event.event_type == "hr_escalated" and session.incident_status != "SECURITY_ESCALATED":
+                session.incident_status = "HR_ESCALATED"
+            elif world_event.event_type == "dialogue_refused":
+                session.dialogue_refused_npc_ids.update(direct_targets)
+            self._append_event(session, "POLICY ENGINE", world_event.detail, "policy")
+
+        if classification.action_family == "mediation":
+            session.dialogue_refused_npc_ids.difference_update(direct_targets)
+
+    def _record_social_trace_and_message(
+        self,
+        session: GameSession,
+        text: str,
+        classification: SocialImpactClassification,
+        requested_classification: SocialImpactClassification | None,
+        outcome: SocialPolicyOutcome,
+        guardrails: list[GuardrailCheck],
+        fallback_used: bool,
+        message: str,
+    ) -> str:
+        session.social_events.append(
+            SocialEventTrace(
+                id=len(session.social_events) + 1,
+                turn=session.turn,
+                provider=self.social_impact_provider.name,
+                player_input=text,
+                classification=classification,
+                requested_classification=requested_classification,
+                policy_outcome=outcome,
+                guardrails=guardrails,
+                fallback_used=fallback_used,
+            )
+        )
+        self._append_event(session, "POLICY ENGINE", message, "policy")
+        logger.info(
+            "relationship_policy_applied turn=%s family=%s severity=%s targets=%s fallback=%s",
+            session.turn,
+            classification.action_family,
+            classification.severity,
+            ",".join(classification.direct_target_ids),
+            fallback_used,
+        )
+        return message
+
+    def _social_action_message(
+        self,
+        session: GameSession,
+        classification: SocialImpactClassification,
+        outcome: SocialPolicyOutcome,
+    ) -> str:
+        target_names = ", ".join(
+            session.npcs[npc_id].name
+            for npc_id in classification.direct_target_ids
+            if npc_id in session.npcs
+        ) or "대상"
+        messages = {
+            "verbal_pressure": f"{target_names}에게 강압적 언행이 가해져 긴장과 불만이 증가했습니다.",
+            "insult": f"{target_names}이 모욕을 받아 신뢰와 존중이 하락했습니다.",
+            "public_humiliation": f"{target_names}에 대한 공개 망신이 관계와 팀 분위기를 훼손했습니다.",
+            "threat": f"{target_names}이 위협을 느꼈으며 사건이 공식적으로 escalated 됐습니다.",
+            "property_interference": f"{target_names}의 물건에 대한 침해가 관계에 반영됐습니다.",
+            "property_aggression": f"물건을 이용한 공격적 행동으로 {target_names}과 목격자의 관계가 악화됐습니다.",
+            "physical_intimidation": f"{target_names}이 물리적 위협을 느껴 정상적인 협력이 어려워졌습니다.",
+            "physical_assault": f"{target_names}에 대한 신체 공격으로 Security가 호출되고 정상 대화가 중단됐습니다.",
+            "apology": f"{target_names}에게 사과했습니다. 관계는 일부만 회복되며 피해 복구가 필요합니다.",
+            "repair_action": f"{target_names}에 대한 피해 복구가 반영됐습니다. 중재 전까지 관계 제한은 유지됩니다.",
+            "mediation": f"{target_names}과의 중재가 완료되어 관계 회복 제한이 해제됐습니다.",
+            "support": f"{target_names}을 지지해 신뢰와 협력이 개선됐습니다.",
+            "evidence_based_confrontation": f"{target_names}에게 근거를 바탕으로 책임을 물어 긴장은 올랐지만 존중은 유지됐습니다.",
+            "constructive_dialogue": f"{target_names}과 건설적으로 대화해 관계가 소폭 개선됐습니다.",
+        }
+        return messages.get(
+            classification.action_family,
+            f"{classification.action_family} 행동의 관계 정책 결과가 적용됐습니다 ({outcome.conduct_level}).",
+        )
 
     def _handle_order(self, session: GameSession) -> str:
         self._append_event(session, "System", "배포 중단 및 롤백을 지시했습니다.", "command")
@@ -497,6 +1031,8 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "대화할 NPC를 찾지 못했습니다.", "guardrail")
             return "대화할 NPC를 찾지 못했습니다."
+        if target_id in session.dialogue_refused_npc_ids:
+            return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "talk", player_input)
         self._apply_decision(session, npc, decision, f"Player talked to {npc.name}.", provider_fallback)
         self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
@@ -508,6 +1044,8 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "질문할 NPC를 찾지 못했습니다.", "guardrail")
             return "질문할 NPC를 찾지 못했습니다."
+        if target_id in session.dialogue_refused_npc_ids:
+            return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "ask", player_input)
         self._apply_decision(session, npc, decision, f"Player asked {npc.name} about the incident.", provider_fallback)
         self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
@@ -519,6 +1057,8 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "책임을 물을 NPC를 찾지 못했습니다.", "guardrail")
             return "책임을 물을 NPC를 찾지 못했습니다."
+        if target_id in session.dialogue_refused_npc_ids:
+            return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "accuse", player_input)
         self._apply_decision(session, npc, decision, f"Player accused {npc.name}.", provider_fallback)
         self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
@@ -533,10 +1073,17 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "옹호할 NPC를 찾지 못했습니다.", "guardrail")
             return "옹호할 NPC를 찾지 못했습니다."
+        if target_id in session.dialogue_refused_npc_ids:
+            return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "defend", player_input)
         self._apply_decision(session, npc, decision, f"Player defended {npc.name}.", provider_fallback)
         self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
         return decision.dialogue
+
+    def _record_dialogue_refusal(self, session: GameSession, npc: NPCState) -> str:
+        message = "심각한 갈등 사건이 해결되지 않아 현재 정상적인 대화를 거부합니다. 사과, 피해 복구, 중재가 필요합니다."
+        self._append_event(session, npc.name, message, "policy", npc.id)
+        return message
 
     def _request_decision(
         self,
