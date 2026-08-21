@@ -42,3 +42,6 @@ def test_office_move_hint_api_skips_intent_provider() -> None:
     assert action_response.status_code == 200
     assert action_response.json()["intent_provider"] == "ui"
     assert action_response.json()["snapshot"]["current_location"] == "qa_desk"
+    events = action_response.json()["snapshot"]["events"]
+    assert not any(event["message"] == "QA Desk로 이동한다." for event in events)
+    assert events[-1]["message"] == "QA Desk로 이동했습니다."

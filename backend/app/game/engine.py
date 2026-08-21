@@ -124,7 +124,11 @@ class GameEngine:
             )
 
         session.turn += 1
-        self._append_event(session, "Player", text.strip(), "input")
+        # Natural-language input is logged for the conversation timeline.
+        # Explicit UI hints already have a visible pending state, so persisting
+        # the raw button command would duplicate the movement confirmation.
+        if intent_hint is None:
+            self._append_event(session, "Player", text.strip(), "input")
         if intent_hint is not None:
             intent = self._validate_intent_hint(session, intent_hint)
             intent_fallback = False

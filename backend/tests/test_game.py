@@ -101,6 +101,8 @@ def test_office_move_hint_bypasses_intent_provider() -> None:
     assert response.intent_provider == "ui"
     assert response.intent_fallback_used is False
     assert response.snapshot.current_location == "qa_desk"
+    assert not any(event.message == "QA Desk로 이동한다." for event in response.snapshot.events)
+    assert response.snapshot.events[-1].message == "QA Desk로 이동했습니다."
 
 
 def test_evidence_propagates_to_backend_belief() -> None:
