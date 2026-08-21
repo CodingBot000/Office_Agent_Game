@@ -26,6 +26,7 @@ from app.game.seed import NPC_HOME_LOCATIONS
 from app.game.social_rules import (
     BASE_RELATIONSHIP_IMPACTS,
     HARMFUL_ACTION_FAMILIES,
+    GAME_ACTION_FAMILIES,
     RECOVERY_ACTION_FAMILIES,
     SEVERITY_RANGES,
 )
@@ -110,6 +111,7 @@ class GameSession:
     social_events: list[SocialEventTrace] = field(default_factory=list)
     game_action_traces: list[GameActionTrace] = field(default_factory=list)
     dialogue_refused_npc_ids: set[str] = field(default_factory=set)
+    blocked_action_alert: str | None = None
     evidences: dict[str, Evidence] = field(default_factory=clone_evidence)
     events: list[EventLogEntry] = field(default_factory=list)
     agent_traces: list[AgentTrace] = field(default_factory=list)
@@ -216,6 +218,30 @@ class GameEngine:
         if intent_hint is None:
             self._append_event(session, "Player", text.strip(), "input")
         message = self._handle_action(session, intent, text)
+        if session.blocked_action_alert:
+            alert = session.blocked_action_alert
+            session.blocked_action_alert = None
+            blocked_turn = session.turn
+            session.turn -= 1
+            if (
+                session.events
+                and session.events[-1].actor_id is None
+                and session.events[-1].actor == "Player"
+                and session.events[-1].event_type == "input"
+                and session.events[-1].turn == blocked_turn
+            ):
+                session.events.pop()
+            self._save_session(session)
+            return ActionResponse(
+                snapshot=self.snapshot(session),
+                classified_action="game_action_attempt",
+                message=alert,
+                intent_provider=intent_provider,
+                intent_confidence=intent.confidence,
+                intent_fallback_used=intent_fallback,
+                blocked=True,
+                alert=alert,
+            )
         social_trace = (
             session.social_events[-1]
             if session.social_events and session.social_events[-1].turn == session.turn
@@ -380,6 +406,14 @@ class GameEngine:
             turn=session.turn,
         )
         self._apply_social_outcome(session, classification, outcome)
+        owner = session.npcs[world_object.owner_id]
+        self._append_event(
+            session,
+            owner.name,
+            self._social_reaction_message(classification, owner),
+            "dialogue",
+            owner.id,
+        )
 
     def _record_blocked_game_action(
         self,
@@ -697,6 +731,10 @@ class GameEngine:
             )
             classification = self.social_impact_fallback_provider.classify_social_impact(context)
             provider_fallback = True
+
+        if classification.action_family in GAME_ACTION_FAMILIES:
+            session.blocked_action_alert = GAME_ACTION_ALERT
+            return GAME_ACTION_ALERT
 
         guardrails = self._validate_social_classification(session, context, classification)
         fallback_used = provider_fallback

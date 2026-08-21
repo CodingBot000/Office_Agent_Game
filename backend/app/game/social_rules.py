@@ -54,6 +54,14 @@ SEVERE_ACTION_FAMILIES = {
 
 RECOVERY_ACTION_FAMILIES = {"apology", "mediation", "repair_action"}
 
+GAME_ACTION_FAMILIES = {
+    "property_interference",
+    "property_aggression",
+    "physical_intimidation",
+    "physical_assault",
+    "sabotage",
+}
+
 SEVERITY_RANGES = {
     "constructive_dialogue": (1, 2),
     "evidence_based_confrontation": (1, 3),

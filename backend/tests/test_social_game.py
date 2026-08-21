@@ -1,7 +1,7 @@
 import logging
 
 from app.game.engine import GameEngine
-from app.models import IntentClassification, SocialImpactClassification
+from app.models import GameActionRequest, IntentClassification, SocialImpactClassification
 from app.providers.base import ProviderError
 
 
@@ -69,12 +69,13 @@ def move_to_qa_desk(engine: GameEngine, session_id: str) -> None:
     )
 
 
-def test_keyboard_throw_applies_relationship_object_and_hr_policy() -> None:
+def test_game_action_break_applies_relationship_object_and_hr_policy() -> None:
     engine = GameEngine(intent_provider=SocialIntentProvider())
     started = engine.create_session()
     move_to_qa_desk(engine, started.session_id)
 
-    response = engine.submit_action(started.session_id, "QA의 키보드를 빼앗아 던진다.")
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_qa_keyboard"))
+    response = engine.submit_game_action(started.session_id, GameActionRequest(action_id="break_qa_keyboard"))
 
     qa_relationship = next(
         relationship
@@ -83,15 +84,11 @@ def test_keyboard_throw_applies_relationship_object_and_hr_policy() -> None:
     )
     qa = next(npc for npc in response.snapshot.npcs if npc.id == "qa_01")
     keyboard = next(item for item in response.snapshot.world_objects if item.id == "qa_keyboard")
-    social_trace = response.snapshot.social_events[-1]
-    assert response.classified_action == "social_action"
-    assert response.social_impact_fallback_used is False
-    assert social_trace.classification.action_family == "property_aggression"
     assert qa_relationship.trust < 15
     assert qa_relationship.fear >= 20
     assert qa_relationship.trust_ceiling == 20
     assert qa_relationship.repair_stage == "none"
-    assert keyboard.condition == "damaged"
+    assert keyboard.condition == "destroyed"
     assert response.snapshot.incident_status == "HR_ESCALATED"
     assert qa.important_memories
     assert any(
@@ -118,8 +115,7 @@ def test_observable_verbal_pressure_affects_witnesses_less_than_target() -> None
     assert all(abs(effect.trust_delta) < abs(direct.trust_delta) for effect in witnesses)
 
 
-def test_invalid_semantic_object_uses_visible_deterministic_fallback(caplog) -> None:
-    caplog.set_level(logging.WARNING)
+def test_natural_language_object_action_is_blocked_even_if_social_provider_classifies_it() -> None:
     engine = GameEngine(
         intent_provider=SocialIntentProvider(),
         social_impact_provider=InvalidObjectSocialProvider(),
@@ -129,13 +125,10 @@ def test_invalid_semantic_object_uses_visible_deterministic_fallback(caplog) -> 
 
     response = engine.submit_action(started.session_id, "QA의 키보드를 빼앗아 던진다.")
 
-    trace = response.snapshot.social_events[-1]
-    assert response.social_impact_fallback_used is True
-    assert trace.requested_classification is not None
-    assert trace.requested_classification.object_id == "invented_keyboard"
-    assert trace.classification.object_id == "qa_keyboard"
-    assert response.snapshot.fallback_notices[-1].stage == "social_impact_guardrail"
-    assert "deterministic_fallback" in caplog.text
+    assert response.blocked is True
+    assert response.alert == "Use the provided action buttons to perform game actions."
+    assert response.snapshot.social_events == []
+    assert response.snapshot.turn == 1
 
 
 def test_social_provider_failure_uses_visible_deterministic_fallback() -> None:
@@ -174,18 +167,19 @@ def test_physical_assault_blocks_dialogue_until_recovery() -> None:
     move_to_qa_desk(engine, started.session_id)
 
     assault = engine.submit_action(started.session_id, "QA를 주먹으로 때린다.")
-    refused = engine.submit_action(started.session_id, "QA에게 무슨 업무를 맡았는지 묻는다.")
-
-    assert assault.snapshot.incident_status == "SECURITY_ESCALATED"
-    assert "qa_01" in assault.snapshot.dialogue_refused_npc_ids
-    assert "정상적인 대화를 거부" in refused.message
+    assert assault.blocked is True
+    assert assault.alert == "Use the provided action buttons to perform game actions."
+    assert assault.snapshot.incident_status == "ACTIVE"
+    assert assault.snapshot.dialogue_refused_npc_ids == []
+    assert assault.snapshot.turn == 1
 
 
 def test_apology_repair_and_mediation_restore_in_stages() -> None:
     engine = GameEngine(intent_provider=SocialIntentProvider())
     started = engine.create_session()
     move_to_qa_desk(engine, started.session_id)
-    engine.submit_action(started.session_id, "QA의 키보드를 빼앗아 던진다.")
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_qa_keyboard"))
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="break_qa_keyboard"))
 
     apologized = engine.submit_action(started.session_id, "QA에게 진심으로 사과한다.")
     repaired = engine.submit_action(started.session_id, "QA에게 새 키보드로 보상하고 피해를 복구한다.")

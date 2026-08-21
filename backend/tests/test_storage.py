@@ -91,3 +91,30 @@ def test_v3_relationships_migrate_to_v5_directional_graph(tmp_path) -> None:
     assert restored.relationships["player->qa_01"].trust == 0
     assert restored.world_objects["qa_keyboard"].owner_id == "qa_01"
     assert restored.social_events == []
+
+
+def test_v4_session_migrates_game_action_inventory_fields_to_v5(tmp_path) -> None:
+    database_path = tmp_path / "game-action-migration.db"
+    settings = Settings(
+        ai_provider="deterministic-mock",
+        session_storage="sqlite",
+        sqlite_path=str(database_path),
+    )
+    engine = GameEngine(settings=settings)
+    started = engine.create_session()
+    repository = SQLiteSessionRepository(str(database_path))
+    payload = repository.load(started.session_id)
+    assert payload is not None
+    payload["schema_version"] = 4
+    payload.pop("player_inventory", None)
+    payload.pop("game_action_traces", None)
+    repository.save(started.session_id, payload)
+
+    restored = GameEngine(settings=settings).get_session(started.session_id)
+    migrated_payload = repository.load(started.session_id)
+
+    assert migrated_payload is not None
+    assert migrated_payload["schema_version"] == 5
+    assert restored.game_action_traces == []
+    assert restored.world_objects["backend_keyboard"].holder_id is None
+    assert restored.world_objects["backend_keyboard"].condition == "normal"
