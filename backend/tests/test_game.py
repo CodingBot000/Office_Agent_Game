@@ -112,6 +112,20 @@ def test_request_evidence_reveals_requested_warning() -> None:
     assert "API response mismatch" in response.message
 
 
+def test_command_result_is_system_event_not_duplicate_player_event() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "배포 중단하고 롤백해")
+
+    assert response.classified_action == "order"
+    assert response.snapshot.events[-2].actor == "Player"
+    assert response.snapshot.events[-2].message == "배포 중단하고 롤백해"
+    assert response.snapshot.events[-1].actor == "System"
+    assert response.snapshot.events[-1].message == "배포 중단 및 롤백을 지시했습니다."
+    assert response.snapshot.incident_status == "MITIGATING"
+
+
 def test_qa_desk_location_button_command_moves_to_qa_desk() -> None:
     engine = GameEngine()
     snapshot = engine.create_session()

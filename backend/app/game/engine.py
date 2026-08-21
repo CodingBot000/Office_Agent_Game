@@ -264,7 +264,7 @@ class GameEngine:
         if action == "accuse":
             return self._accuse_npc(session, target_id, text)
         if action == "order":
-            self._append_event(session, "Player", "배포 중단 및 롤백을 지시했습니다.", "command")
+            self._append_event(session, "System", "배포 중단 및 롤백을 지시했습니다.", "command")
             session.incident_status = "MITIGATING"
             return "롤백 지시가 기록되었습니다."
         if action == "move":
@@ -275,11 +275,11 @@ class GameEngine:
                 "qa_desk": "QA Desk",
                 "pm_desk": "PM Desk",
             }
-            self._append_event(session, "Player", f"{location_labels[session.current_location]}로 이동했습니다.", "movement")
+            self._append_event(session, "System", f"{location_labels[session.current_location]}로 이동했습니다.", "movement")
             return "현재 위치가 변경되었습니다."
         if action == "summon_meeting":
             session.current_location = "meeting_room"
-            self._append_event(session, "Player", "팀원들을 회의실로 소집했습니다.", "command")
+            self._append_event(session, "System", "팀원들을 회의실로 소집했습니다.", "command")
             return "회의실에 팀원들이 모였습니다."
         if action == "report_conclusion":
             self._append_event(session, "System", "보고서 화면에서 최종 원인과 기여 요인을 제출하세요.", "prompt")
