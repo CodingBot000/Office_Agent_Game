@@ -19,7 +19,7 @@ function App() {
   const [command, setCommand] = useState("");
   const [primaryCause, setPrimaryCause] = useState("");
   const [contributingFactors, setContributingFactors] = useState("");
-  const [showInspector, setShowInspector] = useState(true);
+  const [activeInspectorTab, setActiveInspectorTab] = useState<"npc" | "agent">("npc");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -321,12 +321,14 @@ function App() {
 
         <aside className="right-inspector">
           <div className="inspector-tabs">
-            <button className="active" type="button">NPC STATE</button>
-            <button type="button" onClick={() => setShowInspector((current) => !current)}>AGENT INSPECTOR</button>
+            <button className={activeInspectorTab === "npc" ? "active" : ""} type="button" onClick={() => setActiveInspectorTab("npc")}>NPC STATE</button>
+            <button className={activeInspectorTab === "agent" ? "active" : ""} type="button" onClick={() => setActiveInspectorTab("agent")}>AGENT INSPECTOR</button>
           </div>
 
           {selectedNpc && (
             <div className="inspector-content">
+              {activeInspectorTab === "npc" ? (
+                <>
               <div className="inspector-title-row">
                 <div>
                   <span className="eyebrow">SELECTED NPC</span>
@@ -374,25 +376,6 @@ function App() {
                 </div>
               </InfoBlock>
 
-              {showInspector && latestTrace && (
-                <InfoBlock title="LATEST AGENT TRACE">
-                  <div className="trace-block">
-                    <div className="trace-line"><span>PROVIDER</span><b>{latestTrace.provider}</b></div>
-                    <p className="trace-summary">{latestTrace.context_summary}</p>
-                    <div className="trace-line"><span>ACTION</span><b>{latestTrace.decision.action_type}</b></div>
-                    <div className="guardrail-list">
-                      {latestTrace.guardrails.map((check) => (
-                        <div className="guardrail-row" key={check.name}>
-                          <span className={check.passed ? "pass" : "fail"}>{check.passed ? "✓" : "×"}</span>
-                          <span>{check.name.replaceAll("_", " ")}</span>
-                        </div>
-                      ))}
-                    </div>
-                    {latestTrace.fallback_used && <p className="fallback-note">Fallback applied after invalid decision.</p>}
-                  </div>
-                </InfoBlock>
-              )}
-
               <form className="report-form" onSubmit={handleReport}>
                 <div className="section-heading"><span>FINAL REPORT</span><span className="muted-label">{snapshot.completed ? "LOCKED" : "OPTIONAL"}</span></div>
                 <textarea
@@ -409,12 +392,91 @@ function App() {
                 />
                 <button type="submit" disabled={submitting || !primaryCause.trim() || snapshot.completed}>SUBMIT INCIDENT REPORT</button>
               </form>
+                </>
+              ) : (
+                <AgentInspectorPanel latestTrace={latestTrace} selectedNpc={selectedNpc} />
+              )}
             </div>
           )}
         </aside>
       </section>
     </main>
   );
+}
+
+function AgentInspectorPanel({ latestTrace, selectedNpc }: { latestTrace: AgentTrace | null; selectedNpc: NPCState }) {
+  if (!latestTrace) {
+    return (
+      <div className="empty-inspector">
+        <span className="eyebrow">AGENT INSPECTOR</span>
+        <h2>No decision trace yet</h2>
+        <p>해당 NPC에게 질문하거나 행동을 요청하면 구조화된 Agent Decision이 여기에 표시됩니다.</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="inspector-title-row">
+        <div>
+          <span className="eyebrow">AGENT INSPECTOR</span>
+          <h2>Decision Trace</h2>
+          <p>{selectedNpc.name} · turn {String(latestTrace.turn).padStart(2, "0")}</p>
+        </div>
+        <span className="trace-badge">{latestTrace.provider}</span>
+      </div>
+
+      <InfoBlock title="CONTEXT SUMMARY">
+        <p className="trace-summary">{latestTrace.context_summary}</p>
+      </InfoBlock>
+
+      <InfoBlock title="KNOWN FACTS">
+        <ul className="compact-list">
+          {latestTrace.known_facts.map((fact) => <li key={fact}>{fact}</li>)}
+        </ul>
+      </InfoBlock>
+
+      <InfoBlock title="RETRIEVED RULES">
+        {latestTrace.retrieved_rules.length > 0 ? (
+          <ul className="compact-list">
+            {latestTrace.retrieved_rules.map((rule) => <li key={rule}>{rule}</li>)}
+          </ul>
+        ) : (
+          <p className="trace-summary">No external rule retrieved for this decision.</p>
+        )}
+      </InfoBlock>
+
+      <InfoBlock title="STRUCTURED DECISION">
+        <div className="trace-block">
+          <div className="trace-line"><span>ACTION</span><b>{latestTrace.decision.action_type}</b></div>
+          <div className="trace-line"><span>EMOTION</span><b>{latestTrace.decision.emotion}</b></div>
+          <div className="trace-line"><span>STRESS DELTA</span><b>{formatDelta(latestTrace.decision.stress_delta)}</b></div>
+          <div className="trace-line"><span>TRUST DELTA</span><b>{formatDelta(latestTrace.decision.trust_delta)}</b></div>
+          <div className="trace-line"><span>COOPERATION DELTA</span><b>{formatDelta(latestTrace.decision.cooperation_delta)}</b></div>
+          <p className="trace-summary">{latestTrace.decision.dialogue}</p>
+          {latestTrace.decision.memory_candidate && (
+            <p className="trace-summary">Memory candidate: {latestTrace.decision.memory_candidate.summary}</p>
+          )}
+        </div>
+      </InfoBlock>
+
+      <InfoBlock title="GUARDRAIL RESULT">
+        <div className="guardrail-list">
+          {latestTrace.guardrails.map((check) => (
+            <div className="guardrail-row" key={check.name}>
+              <span className={check.passed ? "pass" : "fail"}>{check.passed ? "✓" : "×"}</span>
+              <span>{check.name.replaceAll("_", " ")}</span>
+            </div>
+          ))}
+        </div>
+        {latestTrace.fallback_used && <p className="fallback-note">Fallback applied after an invalid provider result.</p>}
+      </InfoBlock>
+    </>
+  );
+}
+
+function formatDelta(value: number) {
+  return value > 0 ? `+${value}` : String(value);
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
