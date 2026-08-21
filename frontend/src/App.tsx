@@ -14,6 +14,7 @@ const quickCommands = [
 function App() {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
   const [lastIntent, setLastIntent] = useState<ActionResponseMeta | null>(null);
+  const [pendingCommand, setPendingCommand] = useState<PendingCommand | null>(null);
   const [selectedNpcId, setSelectedNpcId] = useState("qa_01");
   const [command, setCommand] = useState("");
   const [primaryCause, setPrimaryCause] = useState("");
@@ -46,11 +47,14 @@ function App() {
 
   async function executeCommand(text: string) {
     if (!snapshot || !text.trim() || submitting || snapshot.completed) return;
+    const submittedText = text.trim();
     setSubmitting(true);
     setError(null);
+    setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "pending" });
     try {
-      const response = await submitAction(snapshot.session_id, text.trim());
+      const response = await submitAction(snapshot.session_id, submittedText);
       setSnapshot(response.snapshot);
+      setPendingCommand(null);
       setLastIntent({
         action: response.classified_action,
         provider: response.intent_provider,
@@ -59,7 +63,9 @@ function App() {
       });
       setCommand("");
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "명령 처리에 실패했습니다.");
+      const message = reason instanceof Error ? reason.message : "명령 처리에 실패했습니다.";
+      setError(message);
+      setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "error", error: message });
     } finally {
       setSubmitting(false);
     }
@@ -77,6 +83,7 @@ function App() {
     try {
       setSnapshot(await resetSession(snapshot.session_id));
       setLastIntent(null);
+      setPendingCommand(null);
       setSelectedNpcId("qa_01");
       setPrimaryCause("");
       setContributingFactors("");
@@ -246,6 +253,22 @@ function App() {
                 <p>{entry.message}</p>
               </article>
             ))}
+            {pendingCommand && (
+              <article className={`event-entry input local-pending ${pendingCommand.status}`}>
+                <div className="event-meta">
+                  <span className="event-actor">Player</span>
+                  <span>TURN {String(pendingCommand.turn).padStart(2, "0")}</span>
+                </div>
+                <p>{pendingCommand.text}</p>
+                {pendingCommand.status === "pending" ? (
+                  <div className="response-status" role="status">
+                    응답 중<span className="loading-dots" aria-hidden="true">...</span>
+                  </div>
+                ) : (
+                  <div className="response-error" role="alert">ERROR · {pendingCommand.error}</div>
+                )}
+              </article>
+            )}
           </div>
 
           <div className="command-area">
@@ -270,7 +293,7 @@ function App() {
                 </button>
               ))}
             </div>
-            {error && <p className="inline-error">{error}</p>}
+            {error && !pendingCommand?.error && <p className="inline-error">{error}</p>}
             {lastIntent && (
               <p className="intent-meta">
                 INTENT <strong>{lastIntent.action}</strong> · {lastIntent.provider} · {Math.round(lastIntent.confidence * 100)}% confidence
@@ -411,6 +434,13 @@ interface ActionResponseMeta {
   provider: "cli" | "openai" | "deterministic-mock";
   confidence: number;
   fallback: boolean;
+}
+
+interface PendingCommand {
+  text: string;
+  turn: number;
+  status: "pending" | "error";
+  error?: string;
 }
 
 export default App;

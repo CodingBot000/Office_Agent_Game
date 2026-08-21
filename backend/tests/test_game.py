@@ -46,6 +46,8 @@ def test_korean_colloquial_question_reaches_ask_action() -> None:
 
     assert response.classified_action == "ask"
     assert "Critical Issue" in response.message
+    assert response.snapshot.events[1].actor == "Player"
+    assert response.snapshot.events[1].message == "QA에게 배포전문제가 뭐야?"
 
 
 def test_engine_uses_semantic_intent_provider_before_game_action() -> None:

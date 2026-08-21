@@ -115,6 +115,7 @@ class GameEngine:
             )
 
         session.turn += 1
+        self._append_event(session, "Player", text.strip(), "input")
         intent, intent_fallback = self._classify_intent(session, text)
         message = self._handle_action(session, intent, text)
         return ActionResponse(
@@ -245,7 +246,6 @@ class GameEngine:
             self._append_event(session, "System", "보고서 화면에서 최종 원인과 기여 요인을 제출하세요.", "prompt")
             return "최종 보고서를 입력하면 사건을 종료할 수 있습니다."
 
-        self._append_event(session, "Player", f'"{text.strip()}"', "dialogue")
         return "행동이 기록되었습니다. 대상을 명시하면 더 정확한 반응을 얻을 수 있습니다."
 
     def _inspect_evidence(self, session: GameSession, text: str, evidence_id: str | None = None) -> str:
