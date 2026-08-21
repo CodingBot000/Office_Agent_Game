@@ -60,6 +60,15 @@ SocialReasonCode = Literal[
     "power_abuse",
 ]
 
+InteractionKind = Literal["dialogue", "game_action_attempt"]
+GameActionFamily = Literal[
+    "pick_up_object",
+    "break_held_object",
+    "drop_held_object",
+    "inspect_object",
+    "throw_held_object",
+]
+
 
 class FactDefinition(BaseModel):
     id: str
@@ -126,6 +135,7 @@ class WorldObjectDefinition(BaseModel):
     name: str
     owner_id: str | None = None
     location: Literal["meeting_room", "dev_area", "qa_desk", "pm_desk"]
+    evidence_id: str | None = None
     portable: bool = True
     destructible: bool = True
 
@@ -133,6 +143,58 @@ class WorldObjectDefinition(BaseModel):
 class WorldObjectState(WorldObjectDefinition):
     holder_id: str | None = None
     condition: Literal["normal", "damaged", "destroyed"] = "normal"
+
+
+class AvailableGameAction(BaseModel):
+    id: str
+    family: GameActionFamily
+    label: str
+    object_id: str | None = None
+    target_id: str | None = None
+    location: str
+    enabled: bool = True
+    disabled_reason: str | None = None
+
+
+class PlayerInventory(BaseModel):
+    held_object_ids: list[str] = Field(default_factory=list)
+    max_held_objects: int = Field(default=1, ge=1, le=10)
+
+
+class GameActionRequest(BaseModel):
+    action_id: str = Field(min_length=1, max_length=120)
+
+
+class GameActionGuardrail(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+
+
+class GameActionTrace(BaseModel):
+    id: int
+    turn: int
+    action_id: str
+    family: GameActionFamily | None = None
+    actor_id: str = "player"
+    location: str
+    object_id: str | None = None
+    owner_id: str | None = None
+    holder_before: str | None = None
+    holder_after: str | None = None
+    condition_before: str | None = None
+    condition_after: str | None = None
+    message: str
+    guardrails: list[GameActionGuardrail] = Field(default_factory=list)
+    blocked: bool = False
+
+
+class GameActionResponse(BaseModel):
+    snapshot: "GameSnapshot"
+    action_id: str
+    message: str
+    blocked: bool = False
+    alert: str | None = None
 
 
 class SocialImpactClassification(BaseModel):
@@ -248,6 +310,8 @@ class AgentDecision(BaseModel):
 
 class IntentClassification(BaseModel):
     intent: ActionType
+    interaction_kind: InteractionKind = "dialogue"
+    game_action_family: GameActionFamily | None = None
     target_npc_id: str | None = None
     evidence_id: str | None = None
     location: Literal["meeting_room", "dev_area", "qa_desk", "pm_desk"] | None = None
@@ -312,6 +376,9 @@ class GameSnapshot(BaseModel):
     npcs: list[NPCState]
     relationships: list[RelationshipState]
     world_objects: list[WorldObjectState]
+    available_game_actions: list[AvailableGameAction]
+    player_inventory: PlayerInventory
+    game_action_traces: list[GameActionTrace]
     social_events: list[SocialEventTrace]
     dialogue_refused_npc_ids: list[str]
     evidences: list[Evidence]
@@ -338,6 +405,8 @@ class ActionResponse(BaseModel):
     intent_fallback_used: bool = False
     social_impact_provider: Literal["cli", "openai", "deterministic-mock"] | None = None
     social_impact_fallback_used: bool = False
+    blocked: bool = False
+    alert: str | None = None
 
 
 class IncidentReportRequest(BaseModel):
@@ -354,3 +423,4 @@ class GameResult(BaseModel):
 
 
 GameSnapshot.model_rebuild()
+GameActionResponse.model_rebuild()

@@ -8,6 +8,7 @@ def test_openapi_contains_unity_client_contract() -> None:
     assert "/api/v1/sessions" in paths
     assert "/api/v1/sessions/{session_id}" in paths
     assert "/api/v1/sessions/{session_id}/actions" in paths
+    assert "/api/v1/sessions/{session_id}/game-actions" in paths
     assert "/api/v1/sessions/{session_id}/report" in paths
     assert "/api/v1/sessions/{session_id}/reset" in paths
 
@@ -23,6 +24,9 @@ def test_openapi_contains_unity_client_contract() -> None:
         "npcs",
         "relationships",
         "world_objects",
+        "available_game_actions",
+        "player_inventory",
+        "game_action_traces",
         "social_events",
         "dialogue_refused_npc_ids",
         "evidences",
@@ -66,3 +70,18 @@ def test_openapi_contains_unity_client_contract() -> None:
 
     action_response = schema["components"]["schemas"]["ActionResponse"]
     assert {"social_impact_provider", "social_impact_fallback_used"}.issubset(action_response["properties"])
+    assert {"blocked", "alert"}.issubset(action_response["properties"])
+
+    intent = schema["components"]["schemas"]["IntentClassification"]
+    assert {"interaction_kind", "game_action_family"}.issubset(intent["properties"])
+
+    world_object = schema["components"]["schemas"]["WorldObjectState"]
+    assert "holder_id" in world_object["properties"]
+
+    game_action_request = schema["components"]["schemas"]["GameActionRequest"]
+    assert "action_id" in game_action_request["properties"]
+
+    game_action_trace = schema["components"]["schemas"]["GameActionTrace"]
+    assert {"action_id", "holder_before", "holder_after", "condition_before", "condition_after"}.issubset(
+        game_action_trace["properties"]
+    )

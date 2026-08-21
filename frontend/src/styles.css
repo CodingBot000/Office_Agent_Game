@@ -137,6 +137,14 @@ h1, h2, p { margin: 0; }
   80%, 100% { width: 1.05em; }
 }
 .command-area { border-top: 1px solid var(--line); padding: 15px 28px 18px; }
+.game-action-panel { padding-bottom: 13px; }
+.game-action-list { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
+.game-action-button { display: grid; gap: 4px; border: 1px solid #526b79; background: #172732; color: var(--cyan); padding: 8px 10px; cursor: pointer; text-align: left; }
+.game-action-button:hover { border-color: var(--cyan); background: #1b3440; }
+.game-action-button:disabled { cursor: not-allowed; opacity: .45; }
+.game-action-button span { font-size: 10px; }
+.game-action-button small { color: var(--faint); font: 8px var(--mono); text-transform: uppercase; }
+.game-action-empty { margin-top: 9px; color: var(--faint); font: 9px var(--mono); }
 .command-form { display: flex; align-items: center; gap: 11px; padding: 4px 5px 4px 12px; border: 1px solid var(--line-bright); background: rgba(15, 25, 34, .82); }
 .prompt-symbol { color: var(--cyan); font: 600 14px var(--mono); }
 .command-form input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; }
@@ -148,6 +156,7 @@ h1, h2, p { margin: 0; }
 .quick-command-row button { border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--muted); padding: 2px 0; cursor: pointer; font-size: 10px; }
 .quick-command-row button:hover { color: var(--cyan); border-bottom-color: var(--cyan); }
 .inline-error { margin-top: 10px; color: var(--red); font-size: 11px; }
+.action-alert { margin-top: 10px; padding: 9px; border: 1px solid #8d6a37; background: #2a2117; color: var(--amber); font: 10px var(--mono); line-height: 1.4; }
 .intent-meta { margin-top: 8px; color: var(--faint); font: 9px var(--mono); letter-spacing: .04em; }
 .intent-meta strong { color: var(--cyan); font-weight: 500; }
 
@@ -179,6 +188,7 @@ h1, h2, p { margin: 0; }
 .object-condition { padding: 4px 5px; border: 1px solid var(--line-bright); color: var(--green); text-align: center; font: 8px var(--mono); text-transform: uppercase; }
 .object-condition.damaged { color: var(--amber); border-color: #7c633d; }
 .object-condition.destroyed { color: var(--red); border-color: #82423e; }
+.object-condition.held { color: var(--cyan); border-color: #3d7d8b; }
 .info-block { padding: 16px 0 17px; border-top: 1px solid var(--line); }
 .info-title { color: var(--muted); font-size: 9px; margin-bottom: 12px; }
 .compact-list { margin: 0; padding-left: 15px; color: var(--muted); display: grid; gap: 8px; font-size: 11px; line-height: 1.45; }

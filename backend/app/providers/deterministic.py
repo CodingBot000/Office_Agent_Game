@@ -20,6 +20,16 @@ class DeterministicIntentProvider:
         normalized = context.player_input.strip().lower()
         target_npc_id = context.target_hint or self._resolve_target(normalized)
 
+        game_action_family = self._resolve_game_action_family(normalized)
+        if game_action_family is not None:
+            return self._result(
+                "social_action",
+                target_npc_id,
+                0.98,
+                interaction_kind="game_action_attempt",
+                game_action_family=game_action_family,
+            )
+
         if any(keyword in normalized for keyword in ("최종 보고", "보고 제출", "report", "결론 제출")):
             return self._result("report_conclusion", target_npc_id, 0.8)
         if any(
@@ -79,14 +89,30 @@ class DeterministicIntentProvider:
         confidence: float,
         evidence_id: str | None = None,
         location: str | None = None,
+        interaction_kind: str = "dialogue",
+        game_action_family: str | None = None,
     ) -> IntentClassification:
         return IntentClassification(
             intent=intent,  # type: ignore[arg-type]
+            interaction_kind=interaction_kind,  # type: ignore[arg-type]
+            game_action_family=game_action_family,  # type: ignore[arg-type]
             target_npc_id=target_npc_id,
             evidence_id=evidence_id,
             location=location,  # type: ignore[arg-type]
             confidence=confidence,
         )
+
+    def _resolve_game_action_family(self, text: str) -> str | None:
+        object_words = ("키보드", "모니터", "서류", "문서", "물건")
+        if not any(word in text for word in object_words):
+            return None
+        if any(keyword in text for keyword in ("부숴", "부수", "부순", "깨뜨", "깨", "파손")):
+            return "break_held_object"
+        if any(keyword in text for keyword in ("내려놓", "놓아", "놓는다")):
+            return "drop_held_object"
+        if any(keyword in text for keyword in ("던져", "던진", "집어", "잡아", "뺏", "빼앗", "들어")):
+            return "pick_up_object"
+        return None
 
     def _resolve_target(self, text: str) -> str | None:
         aliases = {

@@ -55,10 +55,53 @@ export interface WorldObjectState {
   name: string;
   owner_id: string | null;
   location: "meeting_room" | "dev_area" | "qa_desk" | "pm_desk";
+  evidence_id: string | null;
   portable: boolean;
   destructible: boolean;
   holder_id: string | null;
   condition: "normal" | "damaged" | "destroyed";
+}
+
+export type GameActionFamily = "pick_up_object" | "break_held_object" | "drop_held_object" | "inspect_object" | "throw_held_object";
+
+export interface AvailableGameAction {
+  id: string;
+  family: GameActionFamily;
+  label: string;
+  object_id: string | null;
+  target_id: string | null;
+  location: string;
+  enabled: boolean;
+  disabled_reason: string | null;
+}
+
+export interface PlayerInventory {
+  held_object_ids: string[];
+  max_held_objects: number;
+}
+
+export interface GameActionGuardrail {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface GameActionTrace {
+  id: number;
+  turn: number;
+  action_id: string;
+  family: GameActionFamily | null;
+  actor_id: string;
+  location: string;
+  object_id: string | null;
+  owner_id: string | null;
+  holder_before: string | null;
+  holder_after: string | null;
+  condition_before: string | null;
+  condition_after: string | null;
+  message: string;
+  guardrails: GameActionGuardrail[];
+  blocked: boolean;
 }
 
 export interface NPCState {
@@ -224,6 +267,9 @@ export interface GameSnapshot {
   npcs: NPCState[];
   relationships: RelationshipState[];
   world_objects: WorldObjectState[];
+  available_game_actions: AvailableGameAction[];
+  player_inventory: PlayerInventory;
+  game_action_traces: GameActionTrace[];
   social_events: SocialEventTrace[];
   dialogue_refused_npc_ids: string[];
   evidences: Evidence[];
@@ -244,10 +290,22 @@ export interface ActionResponse {
   intent_fallback_used: boolean;
   social_impact_provider: "cli" | "openai" | "deterministic-mock" | null;
   social_impact_fallback_used: boolean;
+  blocked: boolean;
+  alert: string | null;
+}
+
+export interface GameActionResponse {
+  snapshot: GameSnapshot;
+  action_id: string;
+  message: string;
+  blocked: boolean;
+  alert: string | null;
 }
 
 export interface IntentClassification {
   intent: string;
+  interaction_kind?: "dialogue" | "game_action_attempt";
+  game_action_family?: string | null;
   target_npc_id?: string | null;
   evidence_id?: string | null;
   location?: "meeting_room" | "dev_area" | "qa_desk" | "pm_desk" | null;

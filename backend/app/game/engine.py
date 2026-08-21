@@ -21,6 +21,7 @@ from app.game.seed import (
     relationship_key,
 )
 from app.game.relationship_policy import RelationshipPolicyEngine
+from app.game.action_registry import build_available_game_actions, build_player_inventory
 from app.game.seed import NPC_HOME_LOCATIONS
 from app.game.social_rules import (
     BASE_RELATIONSHIP_IMPACTS,
@@ -31,6 +32,7 @@ from app.game.social_rules import (
 from app.models import (
     ActionResponse,
     ActionType,
+    AvailableGameAction,
     AgentDecision,
     AgentTrace,
     Belief,
@@ -40,11 +42,16 @@ from app.models import (
     FallbackNotice,
     GameResult,
     GameSnapshot,
+    GameActionGuardrail,
+    GameActionRequest,
+    GameActionResponse,
+    GameActionTrace,
     GuardrailCheck,
     IncidentReportRequest,
     IntentClassification,
     Memory,
     NPCState,
+    PlayerInventory,
     Relationship,
     RelationshipState,
     RelationshipUpdate,
@@ -74,7 +81,8 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 4
+CURRENT_SESSION_SCHEMA_VERSION = 5
+GAME_ACTION_ALERT = "Use the provided action buttons to perform game actions."
 
 
 AVAILABLE_ACTIONS = list(get_args(ActionType))
@@ -100,6 +108,7 @@ class GameSession:
     relationships: dict[str, RelationshipState] = field(default_factory=clone_relationships)
     world_objects: dict[str, WorldObjectState] = field(default_factory=clone_world_objects)
     social_events: list[SocialEventTrace] = field(default_factory=list)
+    game_action_traces: list[GameActionTrace] = field(default_factory=list)
     dialogue_refused_npc_ids: set[str] = field(default_factory=set)
     evidences: dict[str, Evidence] = field(default_factory=clone_evidence)
     events: list[EventLogEntry] = field(default_factory=list)
@@ -177,12 +186,6 @@ class GameEngine:
                 intent_confidence=1.0,
             )
 
-        session.turn += 1
-        # Natural-language input is logged for the conversation timeline.
-        # Explicit UI hints already have a visible pending state, so persisting
-        # the raw button command would duplicate the movement confirmation.
-        if intent_hint is None:
-            self._append_event(session, "Player", text.strip(), "input")
         if intent_hint is not None:
             intent = self._validate_intent_hint(session, intent_hint)
             intent_fallback = False
@@ -192,6 +195,26 @@ class GameEngine:
                 raise InvalidIntentHintError("Target hint does not match an NPC in the current session.")
             intent, intent_fallback = self._classify_intent(session, text, target_hint)
             intent_provider = self.intent_provider.name
+
+        if intent.interaction_kind == "game_action_attempt":
+            self._save_session(session)
+            return ActionResponse(
+                snapshot=self.snapshot(session),
+                classified_action="game_action_attempt",
+                message=GAME_ACTION_ALERT,
+                intent_provider=intent_provider,
+                intent_confidence=intent.confidence,
+                intent_fallback_used=intent_fallback,
+                blocked=True,
+                alert=GAME_ACTION_ALERT,
+            )
+
+        session.turn += 1
+        # Natural-language input is logged for the conversation timeline.
+        # Explicit UI hints already have a visible pending state, so persisting
+        # the raw button command would duplicate the movement confirmation.
+        if intent_hint is None:
+            self._append_event(session, "Player", text.strip(), "input")
         message = self._handle_action(session, intent, text)
         social_trace = (
             session.social_events[-1]
@@ -209,6 +232,175 @@ class GameEngine:
             social_impact_provider=social_trace.provider if social_trace else None,
             social_impact_fallback_used=social_trace.fallback_used if social_trace else False,
         )
+
+    def submit_game_action(self, session_id: str, request: GameActionRequest) -> GameActionResponse:
+        session = self.get_session(session_id)
+        if session.completed:
+            return GameActionResponse(
+                snapshot=self.snapshot(session),
+                action_id=request.action_id,
+                message="이미 종료된 사건입니다. 새 세션을 시작하세요.",
+                blocked=True,
+                alert="The session is already completed.",
+            )
+
+        action = next(
+            (item for item in build_available_game_actions(session) if item.id == request.action_id),
+            None,
+        )
+        if action is None or not action.enabled:
+            reason = action.disabled_reason if action else "Action is not available in the current world state."
+            trace = GameActionTrace(
+                id=len(session.game_action_traces) + 1,
+                turn=session.turn,
+                action_id=request.action_id,
+                family=action.family if action else None,
+                location=session.current_location,
+                object_id=action.object_id if action else None,
+                owner_id=action.target_id if action else None,
+                message=reason,
+                guardrails=[
+                    GameActionGuardrail(
+                        name="action_available",
+                        passed=False,
+                        detail=reason,
+                    )
+                ],
+                blocked=True,
+            )
+            session.game_action_traces.append(trace)
+            self._save_session(session)
+            return GameActionResponse(
+                snapshot=self.snapshot(session),
+                action_id=request.action_id,
+                message=reason,
+                blocked=True,
+                alert=reason,
+            )
+
+        session.turn += 1
+        message = self._apply_game_action(session, action)
+        self._save_session(session)
+        return GameActionResponse(
+            snapshot=self.snapshot(session),
+            action_id=action.id,
+            message=message,
+        )
+
+    def _apply_game_action(self, session: GameSession, action: AvailableGameAction) -> str:
+        world_object = session.world_objects.get(action.object_id or "")
+        if world_object is None:
+            return self._record_blocked_game_action(session, action, "Object is not present in the current session.")
+
+        holder_before = world_object.holder_id
+        condition_before = world_object.condition
+        owner_id = world_object.owner_id
+        message: str
+
+        if action.family == "inspect_object":
+            if world_object.evidence_id is None or world_object.evidence_id not in session.evidences:
+                return self._record_blocked_game_action(session, action, "This object has no inspectable evidence.")
+            self._discover_evidence(session, world_object.evidence_id)
+            evidence = session.evidences[world_object.evidence_id]
+            message = evidence.content
+            self._append_event(session, "Player", f"Evidence 확인: {evidence.title}", "evidence")
+        elif action.family == "pick_up_object":
+            world_object = world_object.model_copy(update={"holder_id": "player"})
+            session.world_objects[world_object.id] = world_object
+            self._apply_owner_policy(session, world_object, "property_interference", 3, ["property_violation"])
+            message = f"{world_object.name}을(를) 손에 들었습니다."
+            self._append_event(session, "Player", message, "game_action")
+        elif action.family == "break_held_object":
+            self._apply_owner_policy(session, world_object, "property_aggression", 4, ["property_violation", "property_damage"])
+            world_object = session.world_objects[world_object.id].model_copy(
+                update={"holder_id": None, "condition": "destroyed"}
+            )
+            session.world_objects[world_object.id] = world_object
+            message = f"{world_object.name}을(를) 부쉈습니다."
+            self._append_event(session, "Player", message, "game_action")
+            self._append_event(session, "POLICY ENGINE", f"{world_object.name}이(가) 파손되어 사용할 수 없습니다.", "policy")
+        elif action.family == "drop_held_object":
+            world_object = world_object.model_copy(update={"holder_id": None, "location": session.current_location})
+            session.world_objects[world_object.id] = world_object
+            message = f"{world_object.name}을(를) 내려놓았습니다."
+            self._append_event(session, "Player", message, "game_action")
+        else:
+            return self._record_blocked_game_action(session, action, "This game action is not enabled yet.")
+
+        session.game_action_traces.append(
+            GameActionTrace(
+                id=len(session.game_action_traces) + 1,
+                turn=session.turn,
+                action_id=action.id,
+                family=action.family,
+                location=session.current_location,
+                object_id=world_object.id,
+                owner_id=owner_id,
+                holder_before=holder_before,
+                holder_after=world_object.holder_id,
+                condition_before=condition_before,
+                condition_after=world_object.condition,
+                message=message,
+                guardrails=[
+                    GameActionGuardrail(name="action_available", passed=True, detail="Action came from the current server-owned registry."),
+                    GameActionGuardrail(name="world_state_mutated", passed=action.family != "inspect_object", detail="World state mutation completed."),
+                ],
+            )
+        )
+        return message
+
+    def _apply_owner_policy(
+        self,
+        session: GameSession,
+        world_object: WorldObjectState,
+        family: str,
+        severity: int,
+        reason_codes: list[str],
+    ) -> None:
+        if world_object.owner_id is None or world_object.owner_id not in session.npcs:
+            return
+        classification = SocialImpactClassification(
+            action_family=family,  # type: ignore[arg-type]
+            direct_target_ids=[world_object.owner_id],
+            object_id=world_object.id,
+            severity=severity,
+            intentionality="deliberate",
+            observable=True,
+            evidence_based=False,
+            reason_codes=reason_codes,  # type: ignore[arg-type]
+            confidence=1.0,
+        )
+        witnesses = self._derive_witnesses(session, classification, [world_object.owner_id], [], world_object.owner_id)
+        outcome = self.relationship_policy.evaluate(
+            classification,
+            actor_id="player",
+            direct_target_ids=[world_object.owner_id],
+            object_owner_id=world_object.owner_id,
+            witness_ids=witnesses,
+            turn=session.turn,
+        )
+        self._apply_social_outcome(session, classification, outcome)
+
+    def _record_blocked_game_action(
+        self,
+        session: GameSession,
+        action: AvailableGameAction,
+        reason: str,
+    ) -> str:
+        trace = GameActionTrace(
+            id=len(session.game_action_traces) + 1,
+            turn=session.turn,
+            action_id=action.id,
+            family=action.family,
+            location=session.current_location,
+            object_id=action.object_id,
+            owner_id=action.target_id,
+            message=reason,
+            guardrails=[GameActionGuardrail(name="action_state_valid", passed=False, detail=reason)],
+            blocked=True,
+        )
+        session.game_action_traces.append(trace)
+        return reason
 
     def submit_report(self, session_id: str, report: IncidentReportRequest) -> GameSnapshot:
         session = self.get_session(session_id)
@@ -246,6 +438,9 @@ class GameEngine:
             npcs=list(session.npcs.values()),
             relationships=list(session.relationships.values()),
             world_objects=list(session.world_objects.values()),
+            available_game_actions=build_available_game_actions(session),
+            player_inventory=build_player_inventory(session),
+            game_action_traces=session.game_action_traces[-20:],
             social_events=session.social_events[-20:],
             dialogue_refused_npc_ids=sorted(session.dialogue_refused_npc_ids),
             evidences=visible_evidence,
@@ -277,6 +472,8 @@ class GameEngine:
                 object_id: world_object.model_dump(mode="json")
                 for object_id, world_object in session.world_objects.items()
             },
+            "player_inventory": build_player_inventory(session).model_dump(mode="json"),
+            "game_action_traces": [trace.model_dump(mode="json") for trace in session.game_action_traces],
             "social_events": [event.model_dump(mode="json") for event in session.social_events],
             "dialogue_refused_npc_ids": sorted(session.dialogue_refused_npc_ids),
             "evidences": {evidence_id: evidence.model_dump(mode="json") for evidence_id, evidence in session.evidences.items()},
@@ -337,6 +534,8 @@ class GameEngine:
                 for object_id, world_object in build_initial_world_objects().items()
             }
             payload["social_events"] = []
+            payload["player_inventory"] = {"held_object_ids": [], "max_held_objects": 1}
+            payload["game_action_traces"] = []
             payload["dialogue_refused_npc_ids"] = []
         payload["schema_version"] = CURRENT_SESSION_SCHEMA_VERSION
         return payload, True
@@ -361,6 +560,7 @@ class GameEngine:
                 str(object_id): WorldObjectState.model_validate(world_object)
                 for object_id, world_object in dict(world_object_payload).items()
             },
+            game_action_traces=[GameActionTrace.model_validate(trace) for trace in payload.get("game_action_traces", [])],
             social_events=[SocialEventTrace.model_validate(event) for event in payload.get("social_events", [])],
             dialogue_refused_npc_ids={str(item) for item in payload.get("dialogue_refused_npc_ids", [])},
             evidences={

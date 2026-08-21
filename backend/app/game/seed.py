@@ -72,8 +72,20 @@ WORLD_OBJECT_DEFINITIONS = [
         location="meeting_room",
         portable=False,
     ),
-    WorldObjectDefinition(id="release_document", name="Release document", owner_id="pm_01", location="pm_desk"),
-    WorldObjectDefinition(id="qa_warning_printout", name="QA warning printout", owner_id="qa_01", location="qa_desk"),
+    WorldObjectDefinition(
+        id="release_document",
+        name="Release document",
+        owner_id="pm_01",
+        location="pm_desk",
+        evidence_id="release_timeline",
+    ),
+    WorldObjectDefinition(
+        id="qa_warning_printout",
+        name="QA warning printout",
+        owner_id="qa_01",
+        location="qa_desk",
+        evidence_id="qa_warning_message",
+    ),
 ]
 
 WORLD_OBJECT_REGISTRY = {item.id: item for item in WORLD_OBJECT_DEFINITIONS}

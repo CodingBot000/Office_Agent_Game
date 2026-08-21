@@ -24,7 +24,7 @@ def test_sqlite_repository_restores_session_across_engine_instances(tmp_path) ->
 
 
 @pytest.mark.parametrize("legacy_version", [1, 2])
-def test_legacy_known_fact_strings_migrate_to_v4_fact_ids(tmp_path, caplog, legacy_version: int) -> None:
+def test_legacy_known_fact_strings_migrate_to_v5_fact_ids(tmp_path, caplog, legacy_version: int) -> None:
     database_path = tmp_path / f"migration-{legacy_version}.db"
     settings = Settings(
         ai_provider="deterministic-mock",
@@ -59,11 +59,11 @@ def test_legacy_known_fact_strings_migrate_to_v4_fact_ids(tmp_path, caplog, lega
         "qa_sent_warning",
         "qa_has_no_deploy_permission",
     ]
-    assert migrated_payload["schema_version"] == 4
+    assert migrated_payload["schema_version"] == 5
     assert "session_migration_unmapped_fact" in caplog.text
 
 
-def test_v3_relationships_migrate_to_v4_directional_graph(tmp_path) -> None:
+def test_v3_relationships_migrate_to_v5_directional_graph(tmp_path) -> None:
     database_path = tmp_path / "relationship-migration.db"
     settings = Settings(
         ai_provider="deterministic-mock",
@@ -85,7 +85,7 @@ def test_v3_relationships_migrate_to_v4_directional_graph(tmp_path) -> None:
     migrated_payload = repository.load(started.session_id)
 
     assert migrated_payload is not None
-    assert migrated_payload["schema_version"] == 4
+    assert migrated_payload["schema_version"] == 5
     assert restored.relationships["qa_01->player"].trust == 15
     assert restored.relationships["qa_01->backend_01"].tension == 60
     assert restored.relationships["player->qa_01"].trust == 0

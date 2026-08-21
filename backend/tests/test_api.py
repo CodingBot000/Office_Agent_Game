@@ -47,7 +47,7 @@ def test_office_move_hint_api_skips_intent_provider() -> None:
     assert events[-1]["message"] == "QA Desk로 이동했습니다."
 
 
-def test_social_action_api_exposes_policy_contract() -> None:
+def test_natural_language_game_action_is_blocked_by_api() -> None:
     session_response = client.post("/api/v1/sessions")
     session_id = session_response.json()["session_id"]
     client.post(
@@ -65,9 +65,33 @@ def test_social_action_api_exposes_policy_contract() -> None:
 
     assert action_response.status_code == 200
     payload = action_response.json()
-    assert payload["classified_action"] == "social_action"
-    assert payload["social_impact_provider"] == "deterministic-mock"
-    assert payload["social_impact_fallback_used"] is False
-    assert payload["snapshot"]["social_events"][-1]["classification"]["action_family"] == "property_aggression"
+    assert payload["classified_action"] == "game_action_attempt"
+    assert payload["blocked"] is True
+    assert payload["alert"] == "Use the provided action buttons to perform game actions."
+    assert payload["snapshot"]["turn"] == 1
     qa_keyboard = next(item for item in payload["snapshot"]["world_objects"] if item["id"] == "qa_keyboard")
-    assert qa_keyboard["condition"] == "damaged"
+    assert qa_keyboard["condition"] == "normal"
+
+
+def test_game_action_button_api_picks_up_backend_keyboard() -> None:
+    session_response = client.post("/api/v1/sessions")
+    session_id = session_response.json()["session_id"]
+    client.post(
+        f"/api/v1/sessions/{session_id}/actions",
+        json={
+            "text": "Dev Area로 이동한다.",
+            "intent_hint": {"intent": "move", "location": "dev_area", "confidence": 1},
+        },
+    )
+
+    action_response = client.post(
+        f"/api/v1/sessions/{session_id}/game-actions",
+        json={"action_id": "pick_up_backend_keyboard"},
+    )
+
+    assert action_response.status_code == 200
+    payload = action_response.json()
+    assert payload["blocked"] is False
+    keyboard = next(item for item in payload["snapshot"]["world_objects"] if item["id"] == "backend_keyboard")
+    assert keyboard["holder_id"] == "player"
+    assert "backend_keyboard" in payload["snapshot"]["player_inventory"]["held_object_ids"]

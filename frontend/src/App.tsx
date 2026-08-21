@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import { resetSession, startSession, submitAction, submitReport } from "./api";
+import { resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
 import type {
+  AvailableGameAction,
   AgentTrace,
   GameSnapshot,
   IntentClassification,
@@ -31,6 +32,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionAlert, setActionAlert] = useState<string | null>(null);
 
   useEffect(() => {
     startSession()
@@ -81,11 +83,13 @@ function App() {
     const submittedText = text.trim();
     setSubmitting(true);
     setError(null);
+    setActionAlert(null);
     setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "pending" });
     try {
       const response = await submitAction(snapshot.session_id, submittedText, intentHint, targetHintOverride);
       setSnapshot(response.snapshot);
       setPendingCommand(null);
+      setActionAlert(response.alert);
       setLastIntent({
         action: response.classified_action,
         provider: response.intent_provider,
@@ -105,6 +109,22 @@ function App() {
     }
   }
 
+  async function executeGameAction(action: AvailableGameAction) {
+    if (!snapshot || submitting || snapshot.completed || !action.enabled) return;
+    setSubmitting(true);
+    setError(null);
+    setActionAlert(null);
+    try {
+      const response = await submitGameAction(snapshot.session_id, action.id);
+      setSnapshot(response.snapshot);
+      setActionAlert(response.alert);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : "게임 행동 처리에 실패했습니다.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function runCommand(event: FormEvent) {
     event.preventDefault();
     await executeCommand(command, undefined, targetHint ?? selectedNpc?.id ?? null);
@@ -113,7 +133,8 @@ function App() {
   async function handleReset() {
     if (!snapshot || submitting) return;
     setSubmitting(true);
-    setError(null);
+      setError(null);
+      setActionAlert(null);
     try {
       setSnapshot(await resetSession(snapshot.session_id));
       setLastIntent(null);
@@ -318,6 +339,11 @@ function App() {
           </div>
 
           <div className="command-area">
+            <GameActionPanel
+              actions={snapshot.available_game_actions}
+              submitting={submitting || snapshot.completed}
+              onAction={(action) => void executeGameAction(action)}
+            />
             <form className="command-form" onSubmit={runCommand}>
               <span className="prompt-symbol">&gt;</span>
               <input
@@ -352,6 +378,7 @@ function App() {
               ))}
             </div>
             {error && !pendingCommand?.error && <p className="inline-error">{error}</p>}
+            {actionAlert && <p className="action-alert" role="alert">{actionAlert}</p>}
             {lastIntent && (
               <p className="intent-meta">
                 INTENT <strong>{lastIntent.action}</strong> · {lastIntent.provider} · {Math.round(lastIntent.confidence * 100)}% confidence
@@ -425,11 +452,31 @@ function App() {
                 </InfoBlock>
               )}
 
+              <InfoBlock title="PLAYER HAND">
+                <div className="world-object-list">
+                  {snapshot.player_inventory.held_object_ids.length > 0 ? (
+                    snapshot.player_inventory.held_object_ids.map((objectId) => {
+                      const item = snapshot.world_objects.find((worldObject) => worldObject.id === objectId);
+                      return item ? (
+                        <div className="world-object-row" key={item.id}>
+                          <span className="object-condition held">HELD</span>
+                          <div><strong>{item.name}</strong><small>{item.id} · owner {item.owner_id ?? "shared"}</small></div>
+                        </div>
+                      ) : null;
+                    })
+                  ) : (
+                    <p className="trace-summary">Hands are empty.</p>
+                  )}
+                </div>
+              </InfoBlock>
+
               <InfoBlock title="OWNED WORLD OBJECTS">
                 <div className="world-object-list">
                   {snapshot.world_objects.filter((item) => item.owner_id === selectedNpc.id).map((item) => (
                     <div className="world-object-row" key={item.id}>
-                      <span className={`object-condition ${item.condition}`}>{item.condition}</span>
+                      <span className={`object-condition ${item.holder_id === "player" ? "held" : item.condition}`}>
+                        {item.holder_id === "player" ? "HELD BY PLAYER" : item.condition}
+                      </span>
                       <div><strong>{item.name}</strong><small>{item.id} · {item.location}</small></div>
                     </div>
                   ))}
@@ -629,6 +676,44 @@ function AgentInspectorPanel({
         {latestTrace.fallback_used && <p className="fallback-note">Fallback applied after an invalid provider result.</p>}
       </InfoBlock>
     </>
+  );
+}
+
+function GameActionPanel({
+  actions,
+  submitting,
+  onAction,
+}: {
+  actions: AvailableGameAction[];
+  submitting: boolean;
+  onAction: (action: AvailableGameAction) => void;
+}) {
+  return (
+    <section className="game-action-panel" aria-label="Game actions">
+      <div className="section-heading">
+        <span>GAME ACTIONS</span>
+        <span className="muted-label">BUTTON ONLY</span>
+      </div>
+      {actions.length > 0 ? (
+        <div className="game-action-list">
+          {actions.map((action) => (
+            <button
+              className="game-action-button"
+              key={action.id}
+              type="button"
+              disabled={submitting || !action.enabled}
+              title={action.disabled_reason ?? action.id}
+              onClick={() => onAction(action)}
+            >
+              <span>{action.label}</span>
+              <small>{action.family.replaceAll("_", " ")}</small>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="game-action-empty">No game actions available in this location.</p>
+      )}
+    </section>
   );
 }
 

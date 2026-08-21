@@ -102,6 +102,9 @@ Markdown, explanations, hidden reasoning, or chain-of-thought.
 
 Rules:
 - Infer meaning, not just exact keywords.
+- Set interaction_kind=game_action_attempt for physical/object operations such as picking up, breaking,
+  dropping, or throwing an office object. Set game_action_family when this applies.
+- Natural-language game_action_attempts are never executed by the server; the UI must use the supplied buttons.
 - target_hint is a non-authoritative UI hint; still classify intent from the actual dialogue.
 - Use only the supplied IDs for target_npc_id and evidence_id.
 - request_evidence means the Player asks an NPC to reveal evidence to the Player. Requests such as
