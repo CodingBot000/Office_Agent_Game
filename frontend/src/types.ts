@@ -30,6 +30,12 @@ export interface Relationship {
   tension: number;
 }
 
+export interface RelationshipUpdate {
+  target_npc_id: string;
+  trust_delta: number;
+  tension_delta: number;
+}
+
 export interface NPCState {
   id: string;
   name: string;
@@ -75,6 +81,7 @@ export interface AgentDecision {
   trust_delta: number;
   cooperation_delta: number;
   belief_updates: Belief[];
+  relationship_updates: RelationshipUpdate[];
   memory_candidate: Memory | null;
   action_type: string;
   action_target: string | null;
@@ -93,6 +100,15 @@ export interface AgentTrace {
   decision: AgentDecision;
   guardrails: GuardrailCheck[];
   fallback_used: boolean;
+}
+
+export interface FallbackNotice {
+  id: number;
+  turn: number;
+  stage: "intent_provider" | "intent_guardrail" | "decision_provider" | "decision_guardrail";
+  provider: "cli" | "openai" | "deterministic-mock";
+  reason: string;
+  created_at: string;
 }
 
 export interface GameResult {
@@ -115,6 +131,7 @@ export interface GameSnapshot {
   evidences: Evidence[];
   events: EventLogEntry[];
   agent_traces: AgentTrace[];
+  fallback_notices: FallbackNotice[];
   available_actions: string[];
   completed: boolean;
   result: GameResult | null;

@@ -45,6 +45,7 @@ function App() {
       null,
     [selectedNpc?.id, snapshot],
   );
+  const latestFallback = snapshot?.fallback_notices[snapshot.fallback_notices.length - 1] ?? null;
 
   async function executeCommand(text: string, intentHint?: IntentClassification, targetHintOverride?: string | null) {
     if (!snapshot || !text.trim() || submitting || snapshot.completed) return;
@@ -148,6 +149,14 @@ function App() {
           </button>
         </div>
       </header>
+
+      {latestFallback && (
+        <section className="fallback-banner" role="alert">
+          <strong>DETERMINISTIC FALLBACK ACTIVE</strong>
+          <span>{latestFallback.stage} · {latestFallback.provider} · turn {String(latestFallback.turn).padStart(2, "0")}</span>
+          <p>{latestFallback.reason}</p>
+        </section>
+      )}
 
       <section className="workspace-grid">
         <aside className="left-rail">
@@ -471,6 +480,11 @@ function AgentInspectorPanel({ latestTrace, selectedNpc }: { latestTrace: AgentT
           <p className="trace-summary">{latestTrace.decision.dialogue}</p>
           {latestTrace.decision.memory_candidate && (
             <p className="trace-summary">Memory candidate: {latestTrace.decision.memory_candidate.summary}</p>
+          )}
+          {latestTrace.decision.relationship_updates.length > 0 && (
+            <p className="trace-summary">
+              Relationship updates: {latestTrace.decision.relationship_updates.map((update) => `${update.target_npc_id} trust ${formatDelta(update.trust_delta)}, tension ${formatDelta(update.tension_delta)}`).join(" · ")}
+            </p>
           )}
         </div>
       </InfoBlock>

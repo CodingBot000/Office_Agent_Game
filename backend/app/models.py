@@ -53,6 +53,12 @@ class Relationship(BaseModel):
     tension: int = Field(default=0, ge=0, le=100)
 
 
+class RelationshipUpdate(BaseModel):
+    target_npc_id: str
+    trust_delta: int = Field(default=0, ge=-100, le=100)
+    tension_delta: int = Field(default=0, ge=-100, le=100)
+
+
 class NPCState(BaseModel):
     id: str
     name: str
@@ -98,6 +104,7 @@ class AgentDecision(BaseModel):
     trust_delta: int
     cooperation_delta: int
     belief_updates: list[Belief] = Field(default_factory=list)
+    relationship_updates: list[RelationshipUpdate] = Field(default_factory=list)
     memory_candidate: Memory | None = None
     action_type: str
     action_target: str | None = None
@@ -126,6 +133,15 @@ class AgentTrace(BaseModel):
     fallback_used: bool = False
 
 
+class FallbackNotice(BaseModel):
+    id: int
+    turn: int
+    stage: Literal["intent_provider", "intent_guardrail", "decision_provider", "decision_guardrail"]
+    provider: Literal["cli", "openai", "deterministic-mock"]
+    reason: str
+    created_at: datetime
+
+
 class GameSnapshot(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -140,6 +156,7 @@ class GameSnapshot(BaseModel):
     evidences: list[Evidence]
     events: list[EventLogEntry]
     agent_traces: list[AgentTrace]
+    fallback_notices: list[FallbackNotice]
     available_actions: list[str]
     completed: bool = False
     result: "GameResult | None" = None

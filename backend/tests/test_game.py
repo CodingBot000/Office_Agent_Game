@@ -1,5 +1,7 @@
-from app.game.engine import GameEngine
-from app.models import AgentDecision, IncidentReportRequest, IntentClassification
+import logging
+
+from app.game.engine import AVAILABLE_ACTIONS, GameEngine
+from app.models import AgentDecision, IncidentReportRequest, IntentClassification, Memory, RelationshipUpdate
 from app.providers.deterministic import DeterministicDecisionProvider
 
 
@@ -28,6 +30,29 @@ def test_session_starts_with_private_npc_knowledge() -> None:
     assert qa.known_facts
     assert "API response schema" not in " ".join(qa.known_facts)
     assert all(not evidence.discovered for evidence in snapshot.evidences)
+
+
+def test_action_registry_matches_action_type_contract() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    intent = IntentClassification(intent="talk", target_npc_id="qa_01", confidence=1.0)
+
+    assert set(engine._action_handlers(session, intent, "QA와 대화한다")) == set(AVAILABLE_ACTIONS)
+
+
+def test_talk_and_defend_are_connected_to_npc_decisions() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+
+    talk = engine.submit_action(snapshot.session_id, "QA와 이야기한다")
+    defended = engine.submit_action(snapshot.session_id, "QA는 잘못이 아니라고 옹호한다")
+
+    qa = next(npc for npc in defended.snapshot.npcs if npc.id == "qa_01")
+    assert talk.classified_action == "talk"
+    assert talk.snapshot.agent_traces[-1].decision.action_type == "dialogue"
+    assert defended.classified_action == "defend"
+    assert qa.dynamic_state.trust_toward_player > 15
+    assert qa.important_memories[-1].summary.startswith("Player publicly defended")
 
 
 def test_false_accusation_changes_qa_state_and_reveals_warning() -> None:
@@ -169,7 +194,8 @@ def test_evidence_propagates_to_backend_belief() -> None:
     assert response.snapshot.agent_traces[-1].npc_id == "backend_01"
 
 
-def test_invalid_agent_action_is_rejected_with_fallback() -> None:
+def test_invalid_agent_action_is_rejected_with_visible_fallback(caplog) -> None:
+    caplog.set_level(logging.WARNING)
     engine = GameEngine()
     session = engine.get_session(engine.create_session().session_id)
     qa = session.npcs["qa_01"]
@@ -189,6 +215,54 @@ def test_invalid_agent_action_is_rejected_with_fallback() -> None:
     assert trace.fallback_used is True
     assert trace.decision.action_type == "dialogue"
     assert any(not check.passed for check in trace.guardrails)
+    assert session.fallback_notices[-1].stage == "decision_guardrail"
+    assert session.events[-1].actor == "DETERMINISTIC FALLBACK"
+    assert "deterministic_fallback" in caplog.text
+
+
+def test_relationship_update_is_validated_and_applied() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    qa = session.npcs["qa_01"]
+    decision = AgentDecision(
+        npc_id="qa_01",
+        emotion="calm",
+        stress_delta=-2,
+        trust_delta=1,
+        cooperation_delta=2,
+        relationship_updates=[RelationshipUpdate(target_npc_id="backend_01", trust_delta=5, tension_delta=-10)],
+        action_type="dialogue",
+        dialogue="관계를 다시 정리해보겠습니다.",
+    )
+
+    engine._apply_decision(session, qa, decision, "relationship update test")
+
+    relationship = next(item for item in qa.relationships if item.target_npc_id == "backend_01")
+    assert relationship.trust == 5
+    assert relationship.tension == 50
+    assert session.agent_traces[-1].fallback_used is False
+
+
+def test_duplicate_memory_candidate_is_stored_once() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    qa = session.npcs["qa_01"]
+    decision = AgentDecision(
+        npc_id="qa_01",
+        emotion="guarded",
+        stress_delta=0,
+        trust_delta=0,
+        cooperation_delta=0,
+        memory_candidate=Memory(summary="Player repeated the same claim.", importance=0.8, turn=1),
+        action_type="dialogue",
+        dialogue="같은 주장을 다시 들었습니다.",
+    )
+
+    engine._apply_decision(session, qa, decision, "memory test")
+    engine._apply_decision(session, qa, decision, "memory test repeated")
+
+    assert [item.summary for item in qa.recent_memories].count("Player repeated the same claim.") == 1
+    assert [item.summary for item in qa.important_memories].count("Player repeated the same claim.") == 1
 
 
 def test_report_ends_session_with_result() -> None:

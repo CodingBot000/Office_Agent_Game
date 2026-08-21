@@ -24,6 +24,8 @@ class DeterministicIntentProvider:
             return self._result("summon_meeting", target_npc_id, 0.8, location="meeting_room")
         if any(keyword in normalized for keyword in ("롤백", "rollback", "배포 중단")):
             return self._result("order", target_npc_id, 0.8)
+        if any(keyword in normalized for keyword in ("옹호", "두둔", "잘못이 아니", "책임이 없", "defend")):
+            return self._result("defend", target_npc_id, 0.8)
         if any(keyword in normalized for keyword in ("책임", "원인", "잘못", "비난", "accuse", "뒤집어")):
             return self._result("accuse", target_npc_id, 0.8)
         if any(keyword in normalized for keyword in ("묻", "질문", "알고", "무엇", "왜", "뭐야", "뭐가", "무슨", "알려", "설명", "말해", "궁금", "ask", "question")):
@@ -85,6 +87,23 @@ class DeterministicDecisionProvider:
 
     def decide(self, context: DecisionContext) -> AgentDecision:
         npc = context.npc
+        if context.mode == "talk":
+            dialogue_by_npc = {
+                "qa_01": "현재 장애 원인을 확인하려면 배포 전 경고와 승인 과정을 먼저 살펴봐야 합니다.",
+                "backend_01": "API 변경과 배포 판단 과정을 확인하면 사고 흐름을 파악할 수 있습니다.",
+                "frontend_01": "API 변경 전달 시점과 실제 반영 여부를 확인해 주세요.",
+                "pm_01": "일정 변경과 의사결정 과정은 제가 설명드릴 수 있습니다.",
+            }
+            return AgentDecision(
+                npc_id=npc.id,
+                emotion=npc.dynamic_state.emotion,
+                stress_delta=0,
+                trust_delta=0,
+                cooperation_delta=1,
+                action_type="dialogue",
+                dialogue=dialogue_by_npc.get(npc.id, "현재 상황에서 제가 알고 있는 범위부터 설명드리겠습니다."),
+            )
+
         if context.mode == "ask":
             if npc.id == "qa_01":
                 dialogue = "배포 20분 전에 Critical Issue를 발견했고, 배포를 막아야 한다고 메시지를 보냈습니다."
@@ -129,6 +148,22 @@ class DeterministicDecisionProvider:
                 cooperation_delta=-5,
                 action_type="dialogue",
                 dialogue="제 책임만으로 단정하기에는 일정과 공유 과정에도 문제가 있었습니다.",
+            )
+
+        if context.mode == "defend":
+            return AgentDecision(
+                npc_id=npc.id,
+                emotion="relieved",
+                stress_delta=-8,
+                trust_delta=10,
+                cooperation_delta=5,
+                memory_candidate=Memory(
+                    summary=f"Player publicly defended {npc.name} during the incident review.",
+                    importance=0.75,
+                    turn=context.turn,
+                ),
+                action_type="dialogue",
+                dialogue="제 설명을 고려해 주셔서 감사합니다. 알고 있는 사실을 더 적극적으로 공유하겠습니다.",
             )
 
         raise ProviderError(f"Unsupported deterministic decision mode: {context.mode}")

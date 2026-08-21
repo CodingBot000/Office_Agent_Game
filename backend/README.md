@@ -1,6 +1,6 @@
 # Backend
 
-FastAPI 기반의 게임 세션 API입니다. 현재는 외부 LLM 없이 deterministic mock decision으로 Phase 1 루프를 검증합니다.
+FastAPI 기반의 게임 세션 API입니다. CLI와 OpenAI Responses API provider를 같은 structured Intent/Decision 계약으로 지원하며, World State와 NPC State는 backend가 소유합니다.
 
 ## 환경 설정
 
@@ -34,7 +34,14 @@ AI_PROVIDER=deterministic-mock
 
 `OPENAI_API_KEY`는 frontend가 아니라 backend 환경변수에만 둡니다.
 
-현재 Phase 1 engine은 provider adapter를 연결하기 전까지 deterministic decision을 사용합니다. `cli`와 `openai` 값은 provider adapter 연결을 위한 설정 계약으로 먼저 고정해둔 상태입니다.
+Session은 기본적으로 SQLite `data/office_agent.db`에 저장됩니다. 테스트에서는 `SESSION_STORAGE=memory`를 사용합니다.
+
+```dotenv
+SESSION_STORAGE=sqlite
+SQLITE_PATH=data/office_agent.db
+```
+
+Provider가 실패하거나 guardrail에서 결과를 거부하면 deterministic fallback이 마지막 방어 수단으로 실행됩니다. 이 경우 화면 banner, Event Log, Agent Inspector, backend warning log에 fallback 원인이 표시됩니다.
 
 ```bash
 uv sync --extra test

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Callable, get_args
 from uuid import uuid4
 
 from app.config import Settings, get_settings
 from app.game.seed import CANONICAL_TRUTH, INCIDENT_RULES, clone_evidence, clone_npcs
 from app.models import (
     ActionResponse,
+    ActionType,
     AgentDecision,
     AgentTrace,
     Belief,
     DynamicState,
     Evidence,
     EventLogEntry,
+    FallbackNotice,
     GameResult,
     GameSnapshot,
     GuardrailCheck,
@@ -21,24 +25,18 @@ from app.models import (
     IntentClassification,
     Memory,
     NPCState,
+    Relationship,
+    RelationshipUpdate,
 )
 from app.providers import AgentProvider, DecisionContext, IntentContext, IntentProvider, ProviderError, create_intent_provider, create_provider
 from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
+from app.storage import SessionRepository, create_session_repository
 
 
-AVAILABLE_ACTIONS = [
-    "talk",
-    "ask",
-    "accuse",
-    "defend",
-    "order",
-    "inspect",
-    "show_evidence",
-    "request_evidence",
-    "move",
-    "summon_meeting",
-    "report_conclusion",
-]
+logger = logging.getLogger(__name__)
+
+
+AVAILABLE_ACTIONS = list(get_args(ActionType))
 
 ALLOWED_AGENT_ACTION_TYPES = {"dialogue", "show_evidence", "belief_update"}
 
@@ -61,6 +59,7 @@ class GameSession:
     evidences: dict[str, Evidence] = field(default_factory=clone_evidence)
     events: list[EventLogEntry] = field(default_factory=list)
     agent_traces: list[AgentTrace] = field(default_factory=list)
+    fallback_notices: list[FallbackNotice] = field(default_factory=list)
     discovered_evidence: set[str] = field(default_factory=set)
     canonical_truth: list[str] = field(default_factory=lambda: list(CANONICAL_TRUTH))
     completed: bool = False
@@ -83,9 +82,10 @@ class GameEngine:
         provider: AgentProvider | None = None,
         intent_provider: IntentProvider | None = None,
         settings: Settings | None = None,
+        session_repository: SessionRepository | None = None,
     ) -> None:
-        self._sessions: dict[str, GameSession] = {}
         self.settings = settings or get_settings()
+        self.session_repository = session_repository or create_session_repository(self.settings)
         self.provider = provider or create_provider(self.settings)
         self.intent_provider = intent_provider or create_intent_provider(self.settings)
         self.fallback_provider = DeterministicDecisionProvider()
@@ -93,18 +93,18 @@ class GameEngine:
 
     def create_session(self) -> GameSnapshot:
         session = GameSession(session_id=str(uuid4()))
-        self._sessions[session.session_id] = session
         self._append_event(session, "System", "서비스 장애 사건이 시작되었습니다. 현재 상태: ACTIVE.", "system")
+        self._save_session(session)
         return self.snapshot(session)
 
     def get_session(self, session_id: str) -> GameSession:
-        try:
-            return self._sessions[session_id]
-        except KeyError as exc:
-            raise SessionNotFoundError(session_id) from exc
+        payload = self.session_repository.load(session_id)
+        if payload is None:
+            raise SessionNotFoundError(session_id)
+        return self._deserialize_session(payload)
 
     def reset_session(self, session_id: str) -> GameSnapshot:
-        self._sessions.pop(session_id, None)
+        self.session_repository.delete(session_id)
         return self.create_session()
 
     def submit_action(
@@ -140,6 +140,7 @@ class GameEngine:
             intent, intent_fallback = self._classify_intent(session, text, target_hint)
             intent_provider = self.intent_provider.name
         message = self._handle_action(session, intent, text)
+        self._save_session(session)
         return ActionResponse(
             snapshot=self.snapshot(session),
             classified_action=intent.intent,
@@ -160,6 +161,7 @@ class GameEngine:
         session.completed = True
         session.incident_status = "RESOLVED"
         self._append_event(session, "System", "사건 분석이 종료되었습니다. 결과를 확인하세요.", "system")
+        self._save_session(session)
         return self.snapshot(session)
 
     def snapshot(self, session: GameSession) -> GameSnapshot:
@@ -185,9 +187,54 @@ class GameEngine:
             evidences=visible_evidence,
             events=session.events[-50:],
             agent_traces=session.agent_traces[-20:],
+            fallback_notices=session.fallback_notices[-20:],
             available_actions=AVAILABLE_ACTIONS,
             completed=session.completed,
             result=session.result,
+        )
+
+    def _save_session(self, session: GameSession) -> None:
+        self.session_repository.save(session.session_id, self._serialize_session(session))
+
+    def _serialize_session(self, session: GameSession) -> dict[str, object]:
+        return {
+            "session_id": session.session_id,
+            "turn": session.turn,
+            "current_location": session.current_location,
+            "incident_status": session.incident_status,
+            "objective": session.objective,
+            "npcs": {npc_id: npc.model_dump(mode="json") for npc_id, npc in session.npcs.items()},
+            "evidences": {evidence_id: evidence.model_dump(mode="json") for evidence_id, evidence in session.evidences.items()},
+            "events": [event.model_dump(mode="json") for event in session.events],
+            "agent_traces": [trace.model_dump(mode="json") for trace in session.agent_traces],
+            "fallback_notices": [notice.model_dump(mode="json") for notice in session.fallback_notices],
+            "discovered_evidence": sorted(session.discovered_evidence),
+            "canonical_truth": session.canonical_truth,
+            "completed": session.completed,
+            "result": session.result.model_dump(mode="json") if session.result else None,
+        }
+
+    def _deserialize_session(self, payload: dict[str, object]) -> GameSession:
+        npc_payload = payload.get("npcs", {})
+        evidence_payload = payload.get("evidences", {})
+        return GameSession(
+            session_id=str(payload["session_id"]),
+            turn=int(payload.get("turn", 0)),
+            current_location=str(payload.get("current_location", "meeting_room")),
+            incident_status=str(payload.get("incident_status", "ACTIVE")),
+            objective=[str(item) for item in payload.get("objective", [])],
+            npcs={str(npc_id): NPCState.model_validate(npc) for npc_id, npc in dict(npc_payload).items()},
+            evidences={
+                str(evidence_id): Evidence.model_validate(evidence)
+                for evidence_id, evidence in dict(evidence_payload).items()
+            },
+            events=[EventLogEntry.model_validate(event) for event in payload.get("events", [])],
+            agent_traces=[AgentTrace.model_validate(trace) for trace in payload.get("agent_traces", [])],
+            fallback_notices=[FallbackNotice.model_validate(notice) for notice in payload.get("fallback_notices", [])],
+            discovered_evidence={str(item) for item in payload.get("discovered_evidence", [])},
+            canonical_truth=[str(item) for item in payload.get("canonical_truth", CANONICAL_TRUTH)],
+            completed=bool(payload.get("completed", False)),
+            result=GameResult.model_validate(payload["result"]) if payload.get("result") else None,
         )
 
     def _classify_intent(
@@ -209,12 +256,12 @@ class GameEngine:
         try:
             candidate = self.intent_provider.classify(context)
             provider_fallback = False
-        except ProviderError:
-            self._append_event(
+        except ProviderError as exc:
+            self._record_fallback(
                 session,
-                "Intent Agent",
-                f"{self.intent_provider.name} intent provider failed; deterministic classifier used.",
-                "intent_fallback",
+                stage="intent_provider",
+                provider=self.intent_provider.name,
+                reason=str(exc),
             )
             candidate = self.intent_fallback_provider.classify(context)
             provider_fallback = True
@@ -242,50 +289,65 @@ class GameEngine:
         if target_valid and evidence_valid and location_valid:
             return candidate, False
 
-        self._append_event(
+        self._record_fallback(
             session,
-            "Intent Guardrail",
-            "Intent target was outside the current world state; deterministic intent fallback used.",
-            "intent_guardrail",
+            stage="intent_guardrail",
+            provider=self.intent_provider.name,
+            reason="Intent target, evidence, or location was outside the current world state.",
         )
         return self.intent_fallback_provider.classify(context), True
 
     def _handle_action(self, session: GameSession, intent: IntentClassification, text: str) -> str:
-        action = intent.intent
-        target_id = intent.target_npc_id
-        if action == "inspect":
-            return self._inspect_evidence(session, text, intent.evidence_id)
-        if action == "show_evidence":
-            return self._show_evidence(session, target_id, intent.evidence_id)
-        if action == "request_evidence":
-            return self._request_evidence(session, target_id, intent.evidence_id, text)
-        if action == "ask":
-            return self._ask_npc(session, target_id, text)
-        if action == "accuse":
-            return self._accuse_npc(session, target_id, text)
-        if action == "order":
-            self._append_event(session, "System", "배포 중단 및 롤백을 지시했습니다.", "command")
-            session.incident_status = "MITIGATING"
-            return "롤백 지시가 기록되었습니다."
-        if action == "move":
-            session.current_location = intent.location or "dev_area"
-            location_labels = {
-                "meeting_room": "회의실",
-                "dev_area": "개발 구역",
-                "qa_desk": "QA Desk",
-                "pm_desk": "PM Desk",
-            }
-            self._append_event(session, "System", f"{location_labels[session.current_location]}로 이동했습니다.", "movement")
-            return "현재 위치가 변경되었습니다."
-        if action == "summon_meeting":
-            session.current_location = "meeting_room"
-            self._append_event(session, "System", "팀원들을 회의실로 소집했습니다.", "command")
-            return "회의실에 팀원들이 모였습니다."
-        if action == "report_conclusion":
-            self._append_event(session, "System", "보고서 화면에서 최종 원인과 기여 요인을 제출하세요.", "prompt")
-            return "최종 보고서를 입력하면 사건을 종료할 수 있습니다."
+        handlers = self._action_handlers(session, intent, text)
+        if set(handlers) != set(AVAILABLE_ACTIONS):
+            raise RuntimeError("Action handler registry does not match ActionType contract.")
+        return handlers[intent.intent]()
 
-        return "행동이 기록되었습니다. 대상을 명시하면 더 정확한 반응을 얻을 수 있습니다."
+    def _action_handlers(
+        self,
+        session: GameSession,
+        intent: IntentClassification,
+        text: str,
+    ) -> dict[str, Callable[[], str]]:
+        target_id = intent.target_npc_id
+        return {
+            "talk": lambda: self._talk_npc(session, target_id, text),
+            "ask": lambda: self._ask_npc(session, target_id, text),
+            "accuse": lambda: self._accuse_npc(session, target_id, text),
+            "defend": lambda: self._defend_npc(session, target_id, text),
+            "order": lambda: self._handle_order(session),
+            "inspect": lambda: self._inspect_evidence(session, text, intent.evidence_id),
+            "show_evidence": lambda: self._show_evidence(session, target_id, intent.evidence_id),
+            "request_evidence": lambda: self._request_evidence(session, target_id, intent.evidence_id, text),
+            "move": lambda: self._handle_move(session, intent.location),
+            "summon_meeting": lambda: self._handle_summon_meeting(session),
+            "report_conclusion": lambda: self._handle_report_prompt(session),
+        }
+
+    def _handle_order(self, session: GameSession) -> str:
+        self._append_event(session, "System", "배포 중단 및 롤백을 지시했습니다.", "command")
+        session.incident_status = "MITIGATING"
+        return "롤백 지시가 기록되었습니다."
+
+    def _handle_move(self, session: GameSession, location: str | None) -> str:
+        session.current_location = location or "dev_area"
+        location_labels = {
+            "meeting_room": "회의실",
+            "dev_area": "개발 구역",
+            "qa_desk": "QA Desk",
+            "pm_desk": "PM Desk",
+        }
+        self._append_event(session, "System", f"{location_labels[session.current_location]}로 이동했습니다.", "movement")
+        return "현재 위치가 변경되었습니다."
+
+    def _handle_summon_meeting(self, session: GameSession) -> str:
+        session.current_location = "meeting_room"
+        self._append_event(session, "System", "팀원들을 회의실로 소집했습니다.", "command")
+        return "회의실에 팀원들이 모였습니다."
+
+    def _handle_report_prompt(self, session: GameSession) -> str:
+        self._append_event(session, "System", "보고서 화면에서 최종 원인과 기여 요인을 제출하세요.", "prompt")
+        return "최종 보고서를 입력하면 사건을 종료할 수 있습니다."
 
     def _inspect_evidence(self, session: GameSession, text: str, evidence_id: str | None = None) -> str:
         evidence_id = evidence_id or self._evidence_from_text(text) or "release_timeline"
@@ -326,6 +388,17 @@ class GameEngine:
         )
         return evidence.content
 
+    def _talk_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
+        target_id = target_id or "qa_01"
+        npc = session.npcs.get(target_id)
+        if npc is None:
+            self._append_event(session, "System", "대화할 NPC를 찾지 못했습니다.", "guardrail")
+            return "대화할 NPC를 찾지 못했습니다."
+        decision, provider_fallback = self._request_decision(session, npc, "talk", player_input)
+        self._apply_decision(session, npc, decision, f"Player talked to {npc.name}.", provider_fallback)
+        self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
+        return decision.dialogue
+
     def _ask_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
         target_id = target_id or "qa_01"
         npc = session.npcs.get(target_id)
@@ -351,6 +424,17 @@ class GameEngine:
             self._append_event(session, npc.name, "QA Warning evidence를 공개했습니다.", "evidence", npc.id)
         return decision.dialogue
 
+    def _defend_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
+        target_id = target_id or "qa_01"
+        npc = session.npcs.get(target_id)
+        if npc is None:
+            self._append_event(session, "System", "옹호할 NPC를 찾지 못했습니다.", "guardrail")
+            return "옹호할 NPC를 찾지 못했습니다."
+        decision, provider_fallback = self._request_decision(session, npc, "defend", player_input)
+        self._apply_decision(session, npc, decision, f"Player defended {npc.name}.", provider_fallback)
+        self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
+        return decision.dialogue
+
     def _request_decision(
         self,
         session: GameSession,
@@ -369,12 +453,12 @@ class GameEngine:
         )
         try:
             return self.provider.decide(context), False
-        except ProviderError:
-            self._append_event(
+        except ProviderError as exc:
+            self._record_fallback(
                 session,
-                "Agent",
-                f"{self.provider.name} provider failed; deterministic fallback used.",
-                "agent_fallback",
+                stage="decision_provider",
+                provider=self.provider.name,
+                reason=str(exc),
             )
             return self.fallback_provider.decide(context), True
 
@@ -389,6 +473,13 @@ class GameEngine:
         checks = self._validate_decision(session, npc, decision)
         rejected = any(not check.passed for check in checks)
         if rejected:
+            failed_checks = ", ".join(check.name for check in checks if not check.passed)
+            self._record_fallback(
+                session,
+                stage="decision_guardrail",
+                provider=self.provider.name,
+                reason=f"Decision guardrail rejected: {failed_checks}",
+            )
             trace_decision = self._safe_fallback(npc)
             guardrails = checks + [GuardrailCheck(name="fallback_action", passed=True, detail="Safe dialogue fallback applied.")]
             fallback_used = True
@@ -400,10 +491,17 @@ class GameEngine:
         npc.dynamic_state = self._bounded_dynamic_state(npc.dynamic_state, trace_decision)
         for belief in trace_decision.belief_updates:
             self._upsert_belief(npc, belief)
+        for relationship_update in trace_decision.relationship_updates:
+            self._apply_relationship_update(npc, relationship_update)
         if trace_decision.memory_candidate:
-            npc.recent_memories.append(trace_decision.memory_candidate)
-            if trace_decision.memory_candidate.importance >= 0.75:
-                npc.important_memories.append(trace_decision.memory_candidate)
+            duplicate_memory = any(
+                memory.summary.casefold() == trace_decision.memory_candidate.summary.casefold()
+                for memory in (*npc.recent_memories, *npc.important_memories)
+            )
+            if not duplicate_memory:
+                npc.recent_memories.append(trace_decision.memory_candidate)
+                if trace_decision.memory_candidate.importance >= 0.75:
+                    npc.important_memories.append(trace_decision.memory_candidate)
             npc.recent_memories = npc.recent_memories[-8:]
             npc.important_memories = npc.important_memories[-8:]
 
@@ -425,6 +523,7 @@ class GameEngine:
 
     def _validate_decision(self, session: GameSession, npc: NPCState, decision: AgentDecision) -> list[GuardrailCheck]:
         action_targets = set(session.evidences) | set(session.npcs) | {None}
+        belief_subjects = set(session.npcs) | {"player", "incident"}
         return [
             GuardrailCheck(
                 name="npc_exists",
@@ -440,6 +539,16 @@ class GameEngine:
                 name="action_type_allowed",
                 passed=decision.action_type in ALLOWED_AGENT_ACTION_TYPES,
                 detail="Decision action type is in the server-owned action vocabulary.",
+            ),
+            GuardrailCheck(
+                name="belief_subjects_valid",
+                passed=all(belief.subject in belief_subjects for belief in decision.belief_updates),
+                detail="Belief updates reference a known NPC, player, or incident.",
+            ),
+            GuardrailCheck(
+                name="relationship_targets_valid",
+                passed=all(update.target_npc_id in session.npcs for update in decision.relationship_updates),
+                detail="Relationship updates reference NPCs in the current session.",
             ),
             GuardrailCheck(
                 name="state_ranges_valid",
@@ -473,6 +582,23 @@ class GameEngine:
                 npc.beliefs[index] = belief
                 return
         npc.beliefs.append(belief)
+
+    def _apply_relationship_update(self, npc: NPCState, update: RelationshipUpdate) -> None:
+        for index, relationship in enumerate(npc.relationships):
+            if relationship.target_npc_id == update.target_npc_id:
+                npc.relationships[index] = Relationship(
+                    target_npc_id=relationship.target_npc_id,
+                    trust=max(-100, min(100, relationship.trust + update.trust_delta)),
+                    tension=max(0, min(100, relationship.tension + update.tension_delta)),
+                )
+                return
+        npc.relationships.append(
+            Relationship(
+                target_npc_id=update.target_npc_id,
+                trust=max(-100, min(100, update.trust_delta)),
+                tension=max(0, min(100, update.tension_delta)),
+            )
+        )
 
     def _update_backend_after_warning(self, session: GameSession) -> None:
         backend = session.npcs["backend_01"]
@@ -548,6 +674,31 @@ class GameEngine:
             team_trust=team_trust,
             recovery_efficiency=efficiency,
             summary="API schema 변경이 QA 검증 완료 전에 배포된 것이 직접 원인으로 평가되었습니다.",
+        )
+
+    def _record_fallback(self, session: GameSession, stage: str, provider: str, reason: str) -> None:
+        safe_reason = " ".join(reason.split())[-320:] or "Unknown provider failure"
+        notice = FallbackNotice(
+            id=len(session.fallback_notices) + 1,
+            turn=session.turn,
+            stage=stage,
+            provider=provider,
+            reason=safe_reason,
+            created_at=datetime.now(UTC),
+        )
+        session.fallback_notices.append(notice)
+        logger.warning(
+            "deterministic_fallback stage=%s provider=%s turn=%s reason=%s",
+            stage,
+            provider,
+            session.turn,
+            safe_reason,
+        )
+        self._append_event(
+            session,
+            "DETERMINISTIC FALLBACK",
+            f"{stage} · {provider} 실패로 deterministic fallback을 사용했습니다. {safe_reason}",
+            "fallback",
         )
 
     def _append_event(self, session: GameSession, actor: str, message: str, event_type: str, actor_id: str | None = None) -> None:

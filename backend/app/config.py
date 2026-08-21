@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     ai_cli_command: str = "codex"
     ai_cli_model: str = "gpt-5.6-luna"
     ai_cli_timeout_seconds: int = 120
+    session_storage: Literal["memory", "sqlite"] = "sqlite"
+    sqlite_path: str = "data/office_agent.db"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

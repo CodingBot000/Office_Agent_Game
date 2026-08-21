@@ -66,6 +66,10 @@ h1, h2, p { margin: 0; }
 .incident-state.mitigating { color: var(--cyan); }
 .incident-state.resolved { color: var(--green); }
 .incident-state i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; }
+.fallback-banner { display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 12px; padding: 10px 24px; border-bottom: 1px solid #8d403b; background: #2a1719; color: #f5b0a9; font: 10px var(--mono); }
+.fallback-banner strong { color: var(--red); letter-spacing: .06em; }
+.fallback-banner span { color: var(--amber); white-space: nowrap; }
+.fallback-banner p { color: #d7a7a2; line-height: 1.4; }
 .ghost-button, .command-form button, .report-form button { border: 1px solid var(--line-bright); background: transparent; color: var(--muted); padding: 9px 12px; cursor: pointer; font: 500 10px var(--mono); letter-spacing: 0.06em; transition: border-color .15s, color .15s, background .15s; }
 .ghost-button:hover, .command-form button:hover, .report-form button:hover { border-color: var(--cyan); color: var(--cyan); }
 .ghost-button:disabled, button:disabled { cursor: not-allowed; opacity: .5; }
@@ -113,6 +117,7 @@ h1, h2, p { margin: 0; }
 .event-entry.dialogue::before { background: var(--cyan); }
 .event-entry.evidence::before { background: var(--amber); }
 .event-entry.system::before { background: var(--green); }
+.event-entry.fallback::before { background: var(--red); box-shadow: 0 0 10px rgba(240, 112, 105, .55); }
 .event-meta { gap: 11px; color: var(--faint); font: 9px var(--mono); letter-spacing: .06em; }
 .event-actor { color: var(--cyan); }
 .event-entry p { margin-top: 7px; color: var(--text); font-size: 13px; line-height: 1.55; }
@@ -216,6 +221,7 @@ h1, h2, p { margin: 0; }
   .event-log { max-height: 55vh; }
   .right-inspector { border-left: 0; border-top: 1px solid var(--line); }
   .inspector-content { max-height: none; }
+  .fallback-banner { grid-template-columns: 1fr; gap: 5px; padding-inline: 14px; }
 }
 
 @media (max-width: 520px) {
