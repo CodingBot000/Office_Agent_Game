@@ -251,7 +251,10 @@ function App() {
                   className={`npc-item ${npc.id === selectedNpc?.id ? "selected" : ""}`}
                   key={npc.id}
                   type="button"
-                  onClick={() => setSelectedNpcId(npc.id)}
+                  onClick={() => {
+                    setSelectedNpcId(npc.id);
+                    setTargetHint(npc.id);
+                  }}
                 >
                   <span className="avatar">{npc.name.charAt(0)}</span>
                   <span className="npc-copy">
