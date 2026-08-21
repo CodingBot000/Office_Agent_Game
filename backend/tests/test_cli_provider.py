@@ -106,6 +106,7 @@ def test_cli_intent_provider_parses_semantic_intent(monkeypatch: pytest.MonkeyPa
             available_npcs=("qa_01: QA Engineer (QA Engineer)",),
             available_npc_ids=("qa_01",),
             available_evidence_ids=("qa_warning_message",),
+            discovered_evidence_ids=(),
             available_locations=("meeting_room", "dev_area", "qa_desk", "pm_desk"),
             available_actions=("ask", "move", "inspect"),
         )

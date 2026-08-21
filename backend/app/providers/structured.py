@@ -82,6 +82,7 @@ def build_intent_prompt(context: IntentContext) -> str:
             "target_hint": context.target_hint,
             "available_npcs": context.available_npcs,
             "available_evidence_ids": context.available_evidence_ids,
+            "discovered_evidence_ids": context.discovered_evidence_ids,
             "available_locations": context.available_locations,
             "available_actions": context.available_actions,
         },
@@ -97,6 +98,10 @@ Rules:
 - Infer meaning, not just exact keywords.
 - target_hint is a non-authoritative UI hint; still classify intent from the actual dialogue.
 - Use only the supplied IDs for target_npc_id and evidence_id.
+- request_evidence means the Player asks an NPC to reveal evidence to the Player. Requests such as
+  "show me the warning" or "can you show the message?" are request_evidence.
+- show_evidence means the Player presents evidence they already possess to an NPC. Only choose it
+  when evidence_id is present in discovered_evidence_ids.
 - Use location only for move or summon_meeting intents.
 - Choose the closest action from available_actions.
 - Never invent a target, evidence, location, or action.

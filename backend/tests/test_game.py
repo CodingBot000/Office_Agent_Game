@@ -138,6 +138,50 @@ def test_request_evidence_reveals_requested_warning() -> None:
     assert "API response mismatch" in response.message
 
 
+def test_misclassified_evidence_request_falls_back_to_npc_reveal(caplog) -> None:
+    class WrongDirectionIntentProvider:
+        name = "cli"
+        model = "gpt-5.6-luna"
+
+        def classify(self, context: object) -> IntentClassification:
+            return IntentClassification(
+                intent="show_evidence",
+                target_npc_id="qa_01",
+                evidence_id="qa_warning_message",
+                confidence=0.96,
+            )
+
+    caplog.set_level(logging.WARNING)
+    engine = GameEngine(intent_provider=WrongDirectionIntentProvider())
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "QA에게 배포 전 경고 메시지를 보여줄 수 있나요?")
+
+    warning = next(evidence for evidence in response.snapshot.evidences if evidence.id == "qa_warning_message")
+    player_events = [event for event in response.snapshot.events if event.actor == "Player"]
+    assert response.classified_action == "request_evidence"
+    assert response.intent_fallback_used is True
+    assert warning.discovered is True
+    assert len(player_events) == 1
+    assert response.snapshot.events[-1].actor == "QA Engineer"
+    assert "공개했습니다" in response.snapshot.events[-1].message
+    assert not any("QA Engineer에게 QA warning message를 제시했습니다" in event.message for event in response.snapshot.events)
+    assert response.snapshot.fallback_notices[-1].stage == "intent_guardrail"
+    assert "player_evidence_ownership" in response.snapshot.fallback_notices[-1].reason
+    assert "deterministic_fallback" in caplog.text
+
+
+def test_show_evidence_defense_in_depth_does_not_auto_discover() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+
+    message = engine._show_evidence(session, "qa_01", "qa_warning_message")
+
+    assert "아직 확보하지 않은 증거" in message
+    assert "qa_warning_message" not in session.discovered_evidence
+    assert session.events[-1].actor == "System"
+
+
 def test_command_result_is_system_event_not_duplicate_player_event() -> None:
     engine = GameEngine()
     snapshot = engine.create_session()

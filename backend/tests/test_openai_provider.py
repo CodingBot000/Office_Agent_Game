@@ -55,6 +55,7 @@ def test_openai_intent_provider_uses_responses_structured_output(monkeypatch: py
             available_npcs=("qa_01: QA Engineer",),
             available_npc_ids=("qa_01",),
             available_evidence_ids=("qa_warning_message",),
+            discovered_evidence_ids=(),
             available_locations=("meeting_room", "dev_area", "qa_desk", "pm_desk"),
             available_actions=("ask", "move", "inspect"),
         )

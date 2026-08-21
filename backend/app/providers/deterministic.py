@@ -52,7 +52,7 @@ class DeterministicIntentProvider:
             )
         ):
             return self._result("social_action", target_npc_id, 0.8)
-        if any(keyword in normalized for keyword in ("증거", "메시지 기록", "로그 확인", "기록 확인", "inspect", "조사")):
+        if any(keyword in normalized for keyword in ("증거", "메시지", "로그 확인", "기록 확인", "inspect", "조사")):
             if any(keyword in normalized for keyword in ("보여", "보여줘", "보여줄", "확인", "요청", "알려")):
                 return self._result("request_evidence", target_npc_id, 0.8, self._resolve_evidence(normalized))
             if any(keyword in normalized for keyword in ("제시", "전달", "공개", "backend", "백엔드")):

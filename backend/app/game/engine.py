@@ -389,6 +389,7 @@ class GameEngine:
             available_npcs=tuple(f"{npc.id}: {npc.name} ({npc.role})" for npc in session.npcs.values()),
             available_npc_ids=tuple(session.npcs),
             available_evidence_ids=tuple(session.evidences),
+            discovered_evidence_ids=tuple(sorted(session.discovered_evidence)),
             available_locations=("meeting_room", "dev_area", "qa_desk", "pm_desk"),
             available_actions=tuple(AVAILABLE_ACTIONS),
         )
@@ -425,14 +426,31 @@ class GameEngine:
         target_valid = candidate.target_npc_id is None or candidate.target_npc_id in session.npcs
         evidence_valid = candidate.evidence_id is None or candidate.evidence_id in session.evidences
         location_valid = candidate.location is None or candidate.location in context.available_locations
-        if target_valid and evidence_valid and location_valid:
+        player_has_evidence = (
+            candidate.intent != "show_evidence"
+            or (
+                candidate.evidence_id in session.discovered_evidence
+                if candidate.evidence_id is not None
+                else bool(session.discovered_evidence)
+            )
+        )
+        if target_valid and evidence_valid and location_valid and player_has_evidence:
             return candidate, False
 
+        failed_checks = []
+        if not target_valid:
+            failed_checks.append("target_exists")
+        if not evidence_valid:
+            failed_checks.append("evidence_exists")
+        if not location_valid:
+            failed_checks.append("location_exists")
+        if not player_has_evidence:
+            failed_checks.append("player_evidence_ownership")
         self._record_fallback(
             session,
             stage="intent_guardrail",
             provider=self.intent_provider.name,
-            reason="Intent target, evidence, or location was outside the current world state.",
+            reason=f"Intent guardrail rejected: {', '.join(failed_checks)}.",
         )
         return self.intent_fallback_provider.classify(context), True
 
@@ -1037,8 +1055,17 @@ class GameEngine:
         return evidence.content
 
     def _show_evidence(self, session: GameSession, target_id: str | None, evidence_id: str | None = None) -> str:
-        evidence_id = evidence_id or next(iter(session.discovered_evidence), "qa_warning_message")
-        self._discover_evidence(session, evidence_id)
+        evidence_id = evidence_id or next(iter(session.discovered_evidence), None)
+        if evidence_id is None or evidence_id not in session.discovered_evidence:
+            logger.warning(
+                "show_evidence_rejected session_id=%s turn=%s evidence_id=%s reason=player_does_not_possess_evidence",
+                session.session_id,
+                session.turn,
+                evidence_id,
+            )
+            message = "Player가 아직 확보하지 않은 증거이므로 NPC에게 제시할 수 없습니다. 먼저 해당 증거를 요청하거나 조사하세요."
+            self._append_event(session, "System", message, "guardrail")
+            return message
         evidence = session.evidences[evidence_id]
         target = target_id or "qa_01"
         if target in session.npcs:

@@ -28,6 +28,7 @@ class IntentContext:
     available_npcs: tuple[str, ...]
     available_npc_ids: tuple[str, ...]
     available_evidence_ids: tuple[str, ...]
+    discovered_evidence_ids: tuple[str, ...]
     available_locations: tuple[str, ...]
     available_actions: tuple[str, ...]
 
