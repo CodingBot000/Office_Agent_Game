@@ -13,6 +13,9 @@ cp .env.example .env
 ```dotenv
 # Local: existing CLI authentication/session
 AI_PROVIDER=cli
+AI_CLI_COMMAND=codex
+AI_CLI_MODEL=gpt-5.5
+AI_CLI_TIMEOUT_SECONDS=120
 ```
 
 ```dotenv

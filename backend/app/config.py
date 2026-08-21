@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     openai_model: str = "replace-with-a-supported-openai-model"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_timeout_seconds: int = 30
+    ai_cli_command: str = "codex"
+    ai_cli_model: str = "gpt-5.5"
+    ai_cli_timeout_seconds: int = 120
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

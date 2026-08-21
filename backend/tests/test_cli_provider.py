@@ -1,0 +1,77 @@
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from app.config import Settings
+from app.game.seed import build_initial_npcs, INCIDENT_RULES
+from app.providers.base import DecisionContext, ProviderError
+from app.providers.cli import CliDecisionProvider
+
+
+def make_context() -> DecisionContext:
+    return DecisionContext(
+        mode="ask",
+        player_input="QA에게 배포 전 문제를 질문한다.",
+        turn=1,
+        npc=build_initial_npcs()["qa_01"],
+        target_npc_id="qa_01",
+        available_evidence_ids=("qa_warning_message",),
+        incident_rules=tuple(INCIDENT_RULES),
+    )
+
+
+def test_cli_provider_parses_structured_output_and_removes_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["command"] = command
+        captured["env"] = kwargs["env"]
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(
+            json.dumps(
+                {
+                    "npc_id": "qa_01",
+                    "emotion": "guarded",
+                    "stress_delta": 0,
+                    "trust_delta": 0,
+                    "cooperation_delta": 0,
+                    "action_type": "dialogue",
+                    "dialogue": "배포 전에 위험을 보고했습니다.",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    provider = CliDecisionProvider(
+        Settings(
+            ai_provider="cli",
+            openai_model="gpt-5.4-nano",
+            ai_cli_model="gpt-5.5",
+            ai_cli_command="codex",
+        )
+    )
+
+    decision = provider.decide(make_context())
+
+    assert decision.npc_id == "qa_01"
+    assert decision.action_type == "dialogue"
+    assert decision.dialogue == "배포 전에 위험을 보고했습니다."
+    assert "--output-schema" in captured["command"]
+    assert "--output-last-message" in captured["command"]
+    assert "OPENAI_API_KEY" not in captured["env"]
+
+
+def test_cli_provider_raises_on_command_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="auth failed")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    provider = CliDecisionProvider(Settings(ai_provider="cli"))
+
+    with pytest.raises(ProviderError, match="CLI provider failed"):
+        provider.decide(make_context())

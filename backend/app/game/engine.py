@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
 from uuid import uuid4
 
+from app.config import Settings, get_settings
 from app.game.seed import CANONICAL_TRUTH, INCIDENT_RULES, clone_evidence, clone_npcs
 from app.models import (
     ActionResponse,
@@ -21,6 +21,8 @@ from app.models import (
     Memory,
     NPCState,
 )
+from app.providers import AgentProvider, DecisionContext, ProviderError, create_provider
+from app.providers.deterministic import DeterministicDecisionProvider
 
 
 AVAILABLE_ACTIONS = [
@@ -36,6 +38,8 @@ AVAILABLE_ACTIONS = [
     "summon_meeting",
     "report_conclusion",
 ]
+
+ALLOWED_AGENT_ACTION_TYPES = {"dialogue", "show_evidence", "belief_update"}
 
 
 @dataclass
@@ -67,14 +71,13 @@ class SessionNotFoundError(KeyError):
 
 
 class GameEngine:
-    """Phase 1 deterministic game loop.
+    """Authoritative game loop with a replaceable agent decision provider."""
 
-    The engine owns the authoritative session state. A future LLM provider can
-    produce AgentDecision candidates, but mutations still pass through here.
-    """
-
-    def __init__(self) -> None:
+    def __init__(self, provider: AgentProvider | None = None, settings: Settings | None = None) -> None:
         self._sessions: dict[str, GameSession] = {}
+        self.settings = settings or get_settings()
+        self.provider = provider or create_provider(self.settings)
+        self.fallback_provider = DeterministicDecisionProvider()
 
     def create_session(self) -> GameSnapshot:
         session = GameSession(session_id=str(uuid4()))
@@ -135,6 +138,8 @@ class GameEngine:
             turn=session.turn,
             current_location=session.current_location,
             incident_status=session.incident_status,
+            ai_provider=self.provider.name,
+            ai_model=self.provider.model,
             objective=session.objective,
             npcs=list(session.npcs.values()),
             evidences=visible_evidence,
@@ -184,9 +189,9 @@ class GameEngine:
         if action == "show_evidence":
             return self._show_evidence(session, target_id)
         if action == "ask":
-            return self._ask_npc(session, target_id)
+            return self._ask_npc(session, target_id, text)
         if action == "accuse":
-            return self._accuse_npc(session, target_id)
+            return self._accuse_npc(session, target_id, text)
         if action == "order":
             self._append_event(session, "Player", "배포 중단 및 롤백을 지시했습니다.", "command")
             session.incident_status = "MITIGATING"
@@ -226,69 +231,66 @@ class GameEngine:
                 return "Backend Developer가 QA 경고를 확인했습니다. 위험을 알고도 배포했는지 되짚기 시작합니다."
         return evidence.content
 
-    def _ask_npc(self, session: GameSession, target_id: str | None) -> str:
+    def _ask_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
         target_id = target_id or "qa_01"
         npc = session.npcs.get(target_id)
         if npc is None:
             self._append_event(session, "System", "질문할 NPC를 찾지 못했습니다.", "guardrail")
             return "질문할 NPC를 찾지 못했습니다."
-        if target_id == "qa_01":
-            dialogue = "배포 20분 전에 Critical Issue를 발견했고, 배포를 막아야 한다고 메시지를 보냈습니다."
-        elif target_id == "backend_01":
-            dialogue = "API 응답 스키마를 바꿨습니다. 일정이 촉박했지만 배포는 진행해야 한다고 판단했습니다."
-        elif target_id == "frontend_01":
-            dialogue = "API 변경을 늦게 전달받았습니다. 제 쪽 로컬 검증은 통과한 상태였습니다."
-        else:
-            dialogue = "일정이 하루 당겨졌고, 사업 측 압박이 있었습니다."
-        decision = AgentDecision(
-            npc_id=target_id,
-            emotion=npc.dynamic_state.emotion,
-            stress_delta=0,
-            trust_delta=0,
-            cooperation_delta=0,
-            action_type="dialogue",
-            dialogue=dialogue,
-        )
-        self._apply_decision(session, npc, decision, f"Player asked {npc.name} about the incident.")
+        decision, provider_fallback = self._request_decision(session, npc, "ask", player_input)
+        self._apply_decision(session, npc, decision, f"Player asked {npc.name} about the incident.", provider_fallback)
         self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
         return decision.dialogue
 
-    def _accuse_npc(self, session: GameSession, target_id: str | None) -> str:
+    def _accuse_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
         target_id = target_id or "qa_01"
         npc = session.npcs.get(target_id)
         if npc is None:
             self._append_event(session, "System", "책임을 물을 NPC를 찾지 못했습니다.", "guardrail")
             return "책임을 물을 NPC를 찾지 못했습니다."
-        if target_id == "qa_01":
-            decision = AgentDecision(
-                npc_id=target_id,
-                emotion="defensive",
-                stress_delta=10,
-                trust_delta=-15,
-                cooperation_delta=-10,
-                memory_candidate=Memory(summary="Player blamed QA despite the existing warning.", importance=0.85, turn=session.turn),
-                action_type="show_evidence",
-                action_target="qa_warning_message",
-                dialogue="저를 탓하기 전에 경고 메시지를 확인해 주세요. 배포 전에 이미 위험을 보고했습니다.",
-            )
-        else:
-            decision = AgentDecision(
-                npc_id=target_id,
-                emotion="defensive",
-                stress_delta=8,
-                trust_delta=-10,
-                cooperation_delta=-5,
-                action_type="dialogue",
-                dialogue="제 책임만으로 단정하기에는 일정과 공유 과정에도 문제가 있었습니다.",
-            )
-        self._apply_decision(session, npc, decision, f"Player accused {npc.name}.")
+        decision, provider_fallback = self._request_decision(session, npc, "accuse", player_input)
+        self._apply_decision(session, npc, decision, f"Player accused {npc.name}.", provider_fallback)
         self._append_event(session, npc.name, decision.dialogue, "dialogue", npc.id)
         if decision.action_type == "show_evidence" and decision.action_target:
             self._discover_evidence(session, decision.action_target)
             self._append_event(session, npc.name, "QA Warning evidence를 공개했습니다.", "evidence", npc.id)
         return decision.dialogue
 
-    def _apply_decision(self, session: GameSession, npc: NPCState, decision: AgentDecision, event: str) -> None:
+    def _request_decision(
+        self,
+        session: GameSession,
+        npc: NPCState,
+        mode: str,
+        player_input: str,
+    ) -> tuple[AgentDecision, bool]:
+        context = DecisionContext(
+            mode=mode,
+            player_input=player_input,
+            turn=session.turn,
+            npc=npc,
+            target_npc_id=npc.id,
+            available_evidence_ids=tuple(session.evidences),
+            incident_rules=tuple(INCIDENT_RULES),
+        )
+        try:
+            return self.provider.decide(context), False
+        except ProviderError:
+            self._append_event(
+                session,
+                "Agent",
+                f"{self.provider.name} provider failed; deterministic fallback used.",
+                "agent_fallback",
+            )
+            return self.fallback_provider.decide(context), True
+
+    def _apply_decision(
+        self,
+        session: GameSession,
+        npc: NPCState,
+        decision: AgentDecision,
+        event: str,
+        provider_fallback: bool = False,
+    ) -> None:
         checks = self._validate_decision(session, npc, decision)
         rejected = any(not check.passed for check in checks)
         if rejected:
@@ -316,12 +318,13 @@ class GameEngine:
                 turn=session.turn,
                 event=event,
                 npc_id=npc.id,
+                provider=self.provider.name,
                 context_summary=f"{npc.name} evaluated the player's latest action using its private knowledge boundary.",
                 known_facts=list(npc.known_facts),
                 retrieved_rules=list(INCIDENT_RULES[:1]) if npc.id == "qa_01" else [],
                 decision=trace_decision,
                 guardrails=guardrails,
-                fallback_used=fallback_used,
+                fallback_used=provider_fallback or fallback_used,
             )
         )
 
@@ -337,6 +340,11 @@ class GameEngine:
                 name="evidence_exists",
                 passed=decision.action_target in action_targets,
                 detail="Action target is a known NPC, evidence, or empty target.",
+            ),
+            GuardrailCheck(
+                name="action_type_allowed",
+                passed=decision.action_type in ALLOWED_AGENT_ACTION_TYPES,
+                detail="Decision action type is in the server-owned action vocabulary.",
             ),
             GuardrailCheck(
                 name="state_ranges_valid",
@@ -396,6 +404,7 @@ class GameEngine:
                 turn=session.turn,
                 event="Player showed QA warning evidence to Backend Developer.",
                 npc_id=backend.id,
+                provider=self.provider.name,
                 context_summary="Backend Developer evaluated newly revealed evidence against its existing belief.",
                 known_facts=list(backend.known_facts),
                 retrieved_rules=list(INCIDENT_RULES),

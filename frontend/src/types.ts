@@ -108,6 +108,8 @@ export interface GameSnapshot {
   turn: number;
   current_location: string;
   incident_status: string;
+  ai_provider: "cli" | "openai" | "deterministic-mock";
+  ai_model: string;
   objective: string[];
   npcs: NPCState[];
   evidences: Evidence[];

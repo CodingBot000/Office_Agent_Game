@@ -114,6 +114,9 @@ function App() {
           </div>
         </div>
         <div className="topbar-meta">
+          <span className={`provider-state ${snapshot.ai_provider}`} title={`Configured AI provider: ${snapshot.ai_provider}`}>
+            <i /> {snapshot.ai_provider} / {snapshot.ai_model}
+          </span>
           <span className="turn-label">TURN {String(snapshot.turn).padStart(2, "0")} / 20</span>
           <span className={`incident-state ${snapshot.incident_status.toLowerCase()}`}>
             <i /> {snapshot.incident_status}

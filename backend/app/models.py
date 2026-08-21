@@ -110,6 +110,8 @@ class GameSnapshot(BaseModel):
     turn: int
     current_location: str
     incident_status: str
+    ai_provider: Literal["cli", "openai", "deterministic-mock"]
+    ai_model: str
     objective: list[str]
     npcs: list[NPCState]
     evidences: list[Evidence]
