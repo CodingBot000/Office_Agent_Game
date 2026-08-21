@@ -1,6 +1,17 @@
 from copy import deepcopy
 
-from app.models import Belief, DynamicState, Evidence, FactDefinition, NPCState, Personality, Relationship
+from app.models import (
+    Belief,
+    DynamicState,
+    Evidence,
+    FactDefinition,
+    NPCState,
+    Personality,
+    Relationship,
+    RelationshipState,
+    WorldObjectDefinition,
+    WorldObjectState,
+)
 
 
 FACT_DEFINITIONS = [
@@ -42,6 +53,34 @@ INCIDENT_RULES = [
     "A critical QA issue must block production deployment until it is resolved.",
     "Production deployment requires confirmation from the responsible developer and team lead.",
 ]
+
+NPC_HOME_LOCATIONS = {
+    "backend_01": "dev_area",
+    "frontend_01": "dev_area",
+    "qa_01": "qa_desk",
+    "pm_01": "pm_desk",
+}
+
+WORLD_OBJECT_DEFINITIONS = [
+    WorldObjectDefinition(id="backend_keyboard", name="Backend keyboard", owner_id="backend_01", location="dev_area"),
+    WorldObjectDefinition(id="frontend_keyboard", name="Frontend keyboard", owner_id="frontend_01", location="dev_area"),
+    WorldObjectDefinition(id="qa_keyboard", name="QA keyboard", owner_id="qa_01", location="qa_desk"),
+    WorldObjectDefinition(id="pm_keyboard", name="PM keyboard", owner_id="pm_01", location="pm_desk"),
+    WorldObjectDefinition(
+        id="meeting_room_monitor",
+        name="Meeting room monitor",
+        location="meeting_room",
+        portable=False,
+    ),
+    WorldObjectDefinition(id="release_document", name="Release document", owner_id="pm_01", location="pm_desk"),
+    WorldObjectDefinition(id="qa_warning_printout", name="QA warning printout", owner_id="qa_01", location="qa_desk"),
+]
+
+WORLD_OBJECT_REGISTRY = {item.id: item for item in WORLD_OBJECT_DEFINITIONS}
+
+
+def relationship_key(source_id: str, target_id: str) -> str:
+    return f"{source_id}->{target_id}"
 
 
 def fact_statements(fact_ids: list[str]) -> list[str]:
@@ -148,9 +187,57 @@ def build_initial_evidence() -> dict[str, Evidence]:
     }
 
 
+def build_relationship_graph(npcs: dict[str, NPCState]) -> dict[str, RelationshipState]:
+    graph: dict[str, RelationshipState] = {}
+    entity_ids = ["player", *npcs]
+    legacy_by_source = {
+        npc.id: {relationship.target_npc_id: relationship for relationship in npc.relationships}
+        for npc in npcs.values()
+    }
+    for source_id in entity_ids:
+        for target_id in entity_ids:
+            if source_id == target_id:
+                continue
+            legacy = legacy_by_source.get(source_id, {}).get(target_id)
+            if source_id in npcs and target_id == "player":
+                trust = npcs[source_id].dynamic_state.trust_toward_player
+                tension = 0
+            elif legacy is not None:
+                trust = legacy.trust
+                tension = legacy.tension
+            else:
+                trust = 0
+                tension = 0
+            graph[relationship_key(source_id, target_id)] = RelationshipState(
+                source_id=source_id,
+                target_id=target_id,
+                trust=trust,
+                tension=tension,
+                respect=max(-100, min(100, trust // 2)),
+                fear=0,
+                grievance=min(100, tension // 3),
+            )
+    return graph
+
+
+def build_initial_world_objects() -> dict[str, WorldObjectState]:
+    return {
+        definition.id: WorldObjectState(**definition.model_dump())
+        for definition in WORLD_OBJECT_DEFINITIONS
+    }
+
+
 def clone_npcs() -> dict[str, NPCState]:
     return deepcopy(build_initial_npcs())
 
 
 def clone_evidence() -> dict[str, Evidence]:
     return deepcopy(build_initial_evidence())
+
+
+def clone_relationships() -> dict[str, RelationshipState]:
+    return deepcopy(build_relationship_graph(build_initial_npcs()))
+
+
+def clone_world_objects() -> dict[str, WorldObjectState]:
+    return deepcopy(build_initial_world_objects())

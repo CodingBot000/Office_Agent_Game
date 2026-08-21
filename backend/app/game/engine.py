@@ -7,7 +7,19 @@ from typing import Callable, get_args
 from uuid import uuid4
 
 from app.config import Settings, get_settings
-from app.game.seed import CANONICAL_TRUTH, FACT_REGISTRY, INCIDENT_RULES, LEGACY_FACT_TEXT_TO_ID, clone_evidence, clone_npcs
+from app.game.seed import (
+    CANONICAL_TRUTH,
+    FACT_REGISTRY,
+    INCIDENT_RULES,
+    LEGACY_FACT_TEXT_TO_ID,
+    build_initial_world_objects,
+    build_relationship_graph,
+    clone_evidence,
+    clone_npcs,
+    clone_relationships,
+    clone_world_objects,
+    relationship_key,
+)
 from app.models import (
     ActionResponse,
     ActionType,
@@ -26,7 +38,10 @@ from app.models import (
     Memory,
     NPCState,
     Relationship,
+    RelationshipState,
     RelationshipUpdate,
+    SocialEventTrace,
+    WorldObjectState,
 )
 from app.providers import AgentProvider, DecisionContext, IntentContext, IntentProvider, ProviderError, create_intent_provider, create_provider
 from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
@@ -34,7 +49,7 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 3
+CURRENT_SESSION_SCHEMA_VERSION = 4
 
 
 AVAILABLE_ACTIONS = list(get_args(ActionType))
@@ -57,6 +72,9 @@ class GameSession:
         ]
     )
     npcs: dict[str, NPCState] = field(default_factory=clone_npcs)
+    relationships: dict[str, RelationshipState] = field(default_factory=clone_relationships)
+    world_objects: dict[str, WorldObjectState] = field(default_factory=clone_world_objects)
+    social_events: list[SocialEventTrace] = field(default_factory=list)
     evidences: dict[str, Evidence] = field(default_factory=clone_evidence)
     events: list[EventLogEntry] = field(default_factory=list)
     agent_traces: list[AgentTrace] = field(default_factory=list)
@@ -189,6 +207,9 @@ class GameEngine:
             ai_model=self.provider.model,
             objective=session.objective,
             npcs=list(session.npcs.values()),
+            relationships=list(session.relationships.values()),
+            world_objects=list(session.world_objects.values()),
+            social_events=session.social_events[-20:],
             evidences=visible_evidence,
             events=session.events[-50:],
             agent_traces=session.agent_traces[-20:],
@@ -210,6 +231,15 @@ class GameEngine:
             "incident_status": session.incident_status,
             "objective": session.objective,
             "npcs": {npc_id: npc.model_dump(mode="json") for npc_id, npc in session.npcs.items()},
+            "relationships": {
+                relationship_id: relationship.model_dump(mode="json")
+                for relationship_id, relationship in session.relationships.items()
+            },
+            "world_objects": {
+                object_id: world_object.model_dump(mode="json")
+                for object_id, world_object in session.world_objects.items()
+            },
+            "social_events": [event.model_dump(mode="json") for event in session.social_events],
             "evidences": {evidence_id: evidence.model_dump(mode="json") for evidence_id, evidence in session.evidences.items()},
             "events": [event.model_dump(mode="json") for event in session.events],
             "agent_traces": [trace.model_dump(mode="json") for trace in session.agent_traces],
@@ -252,12 +282,30 @@ class GameEngine:
             ]
 
         payload["npcs"] = npc_payload
+        if version < 4:
+            migrated_npcs = {
+                str(npc_id): NPCState.model_validate(raw_npc)
+                for npc_id, raw_npc in npc_payload.items()
+                if isinstance(raw_npc, dict)
+            }
+            relationship_graph = build_relationship_graph(migrated_npcs)
+            payload["relationships"] = {
+                relationship_id: relationship.model_dump(mode="json")
+                for relationship_id, relationship in relationship_graph.items()
+            }
+            payload["world_objects"] = {
+                object_id: world_object.model_dump(mode="json")
+                for object_id, world_object in build_initial_world_objects().items()
+            }
+            payload["social_events"] = []
         payload["schema_version"] = CURRENT_SESSION_SCHEMA_VERSION
         return payload, True
 
     def _deserialize_session(self, payload: dict[str, object]) -> GameSession:
         npc_payload = payload.get("npcs", {})
         evidence_payload = payload.get("evidences", {})
+        relationship_payload = payload.get("relationships", {})
+        world_object_payload = payload.get("world_objects", {})
         return GameSession(
             session_id=str(payload["session_id"]),
             turn=int(payload.get("turn", 0)),
@@ -265,6 +313,15 @@ class GameEngine:
             incident_status=str(payload.get("incident_status", "ACTIVE")),
             objective=[str(item) for item in payload.get("objective", [])],
             npcs={str(npc_id): NPCState.model_validate(npc) for npc_id, npc in dict(npc_payload).items()},
+            relationships={
+                str(relationship_id): RelationshipState.model_validate(relationship)
+                for relationship_id, relationship in dict(relationship_payload).items()
+            },
+            world_objects={
+                str(object_id): WorldObjectState.model_validate(world_object)
+                for object_id, world_object in dict(world_object_payload).items()
+            },
+            social_events=[SocialEventTrace.model_validate(event) for event in payload.get("social_events", [])],
             evidences={
                 str(evidence_id): Evidence.model_validate(evidence)
                 for evidence_id, evidence in dict(evidence_payload).items()
@@ -363,7 +420,12 @@ class GameEngine:
             "move": lambda: self._handle_move(session, intent.location),
             "summon_meeting": lambda: self._handle_summon_meeting(session),
             "report_conclusion": lambda: self._handle_report_prompt(session),
+            "social_action": lambda: self._handle_social_action_placeholder(session),
         }
+
+    def _handle_social_action_placeholder(self, session: GameSession) -> str:
+        self._append_event(session, "System", "사회적 행동 정책을 적용할 수 없습니다.", "guardrail")
+        return "사회적 행동 정책을 적용할 수 없습니다."
 
     def _handle_order(self, session: GameSession) -> str:
         self._append_event(session, "System", "배포 중단 및 롤백을 지시했습니다.", "command")
@@ -535,10 +597,14 @@ class GameEngine:
             fallback_used = False
 
         npc.dynamic_state = self._bounded_dynamic_state(npc.dynamic_state, trace_decision)
+        player_relationship = session.relationships[relationship_key(npc.id, "player")]
+        session.relationships[relationship_key(npc.id, "player")] = player_relationship.model_copy(
+            update={"trust": npc.dynamic_state.trust_toward_player, "last_changed_turn": session.turn}
+        )
         for belief in trace_decision.belief_updates:
             self._upsert_belief(npc, belief)
         for relationship_update in trace_decision.relationship_updates:
-            self._apply_relationship_update(npc, relationship_update)
+            self._apply_relationship_update(session, npc, relationship_update)
         if trace_decision.memory_candidate:
             duplicate_memory = any(
                 memory.summary.casefold() == trace_decision.memory_candidate.summary.casefold()
@@ -656,7 +722,7 @@ class GameEngine:
                 return
         npc.beliefs.append(belief)
 
-    def _apply_relationship_update(self, npc: NPCState, update: RelationshipUpdate) -> None:
+    def _apply_relationship_update(self, session: GameSession, npc: NPCState, update: RelationshipUpdate) -> None:
         for index, relationship in enumerate(npc.relationships):
             if relationship.target_npc_id == update.target_npc_id:
                 npc.relationships[index] = Relationship(
@@ -664,13 +730,24 @@ class GameEngine:
                     trust=max(-100, min(100, relationship.trust + update.trust_delta)),
                     tension=max(0, min(100, relationship.tension + update.tension_delta)),
                 )
-                return
-        npc.relationships.append(
-            Relationship(
-                target_npc_id=update.target_npc_id,
-                trust=max(-100, min(100, update.trust_delta)),
-                tension=max(0, min(100, update.tension_delta)),
+                break
+        else:
+            npc.relationships.append(
+                Relationship(
+                    target_npc_id=update.target_npc_id,
+                    trust=max(-100, min(100, update.trust_delta)),
+                    tension=max(0, min(100, update.tension_delta)),
+                )
             )
+
+        edge_id = relationship_key(npc.id, update.target_npc_id)
+        edge = session.relationships[edge_id]
+        session.relationships[edge_id] = edge.model_copy(
+            update={
+                "trust": max(-100, min(100, edge.trust + update.trust_delta)),
+                "tension": max(0, min(100, edge.tension + update.tension_delta)),
+                "last_changed_turn": session.turn,
+            }
         )
 
     def _update_backend_after_warning(self, session: GameSession) -> None:
@@ -687,6 +764,10 @@ class GameEngine:
                 "stress": min(100, backend.dynamic_state.stress + 8),
                 "trust_toward_player": min(100, backend.dynamic_state.trust_toward_player + 3),
             }
+        )
+        player_relationship = session.relationships[relationship_key(backend.id, "player")]
+        session.relationships[relationship_key(backend.id, "player")] = player_relationship.model_copy(
+            update={"trust": backend.dynamic_state.trust_toward_player, "last_changed_turn": session.turn}
         )
         backend.recent_memories.append(
             Memory(summary="Player showed the QA warning message during the incident review.", importance=0.7, turn=session.turn)
@@ -740,7 +821,10 @@ class GameEngine:
         diagnosis_terms = ("api", "schema", "스키마", "백엔드", "backend", "qa", "검증", "배포")
         diagnosis = 85 if sum(term in report.primary_cause.lower() for term in diagnosis_terms) >= 2 else 35
         coverage = min(100, 20 + len(session.discovered_evidence) * 25)
-        average_trust = sum(npc.dynamic_state.trust_toward_player for npc in session.npcs.values()) / len(session.npcs)
+        average_trust = sum(
+            session.relationships[relationship_key(npc.id, "player")].trust
+            for npc in session.npcs.values()
+        ) / len(session.npcs)
         team_trust = max(0, min(100, round(60 + average_trust / 2)))
         efficiency = max(20, min(100, 100 - max(0, session.turn - 5) * 4))
         return GameResult(

@@ -18,6 +18,46 @@ ActionType = Literal[
     "move",
     "summon_meeting",
     "report_conclusion",
+    "social_action",
+]
+
+SocialActionFamily = Literal[
+    "constructive_dialogue",
+    "evidence_based_confrontation",
+    "verbal_pressure",
+    "insult",
+    "public_humiliation",
+    "threat",
+    "property_interference",
+    "property_aggression",
+    "physical_intimidation",
+    "physical_assault",
+    "sabotage",
+    "deception",
+    "support",
+    "apology",
+    "mediation",
+    "repair_action",
+]
+
+SocialReasonCode = Literal[
+    "constructive",
+    "factual_challenge",
+    "coercion",
+    "personal_attack",
+    "public_exposure",
+    "credible_threat",
+    "property_violation",
+    "property_damage",
+    "physical_danger",
+    "work_disruption",
+    "dishonesty",
+    "support",
+    "accountability",
+    "repair",
+    "mediation",
+    "repeat_behavior",
+    "power_abuse",
 ]
 
 
@@ -65,6 +105,83 @@ class RelationshipUpdate(BaseModel):
     target_npc_id: str
     trust_delta: int = Field(default=0, ge=-100, le=100)
     tension_delta: int = Field(default=0, ge=-100, le=100)
+
+
+class RelationshipState(BaseModel):
+    source_id: str
+    target_id: str
+    trust: int = Field(default=0, ge=-100, le=100)
+    tension: int = Field(default=0, ge=0, le=100)
+    respect: int = Field(default=0, ge=-100, le=100)
+    fear: int = Field(default=0, ge=0, le=100)
+    grievance: int = Field(default=0, ge=0, le=100)
+    repair_stage: Literal["none", "acknowledged", "apologized", "repaired", "mediated"] = "none"
+    last_changed_turn: int = 0
+
+
+class WorldObjectDefinition(BaseModel):
+    id: str
+    name: str
+    owner_id: str | None = None
+    location: Literal["meeting_room", "dev_area", "qa_desk", "pm_desk"]
+    portable: bool = True
+    destructible: bool = True
+
+
+class WorldObjectState(WorldObjectDefinition):
+    holder_id: str | None = None
+    condition: Literal["normal", "damaged", "destroyed"] = "normal"
+
+
+class SocialImpactClassification(BaseModel):
+    action_family: SocialActionFamily
+    direct_target_ids: list[str] = Field(default_factory=list)
+    affected_target_ids: list[str] = Field(default_factory=list)
+    object_id: str | None = None
+    severity: int = Field(ge=1, le=5)
+    intentionality: Literal["accidental", "reckless", "deliberate"]
+    observable: bool
+    evidence_based: bool
+    reason_codes: list[SocialReasonCode] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0, le=1)
+
+
+class RelationshipEffect(BaseModel):
+    source_id: str
+    target_id: str
+    trust_delta: int = Field(ge=-100, le=100)
+    tension_delta: int = Field(ge=-100, le=100)
+    respect_delta: int = Field(ge=-100, le=100)
+    fear_delta: int = Field(ge=-100, le=100)
+    grievance_delta: int = Field(ge=-100, le=100)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class EmotionEffect(BaseModel):
+    npc_id: str
+    emotion: str
+    stress_delta: int = Field(ge=-100, le=100)
+    cooperation_delta: int = Field(ge=-100, le=100)
+
+
+class PolicyModifier(BaseModel):
+    code: str
+    multiplier: float = Field(ge=0, le=3)
+
+
+class WorldEvent(BaseModel):
+    event_type: str
+    target_id: str | None = None
+    detail: str
+
+
+class SocialPolicyOutcome(BaseModel):
+    conduct_level: Literal["permitted", "inappropriate", "misconduct", "severe_misconduct"]
+    relationship_effects: list[RelationshipEffect] = Field(default_factory=list)
+    emotion_effects: list[EmotionEffect] = Field(default_factory=list)
+    mandatory_world_events: list[WorldEvent] = Field(default_factory=list)
+    memory_candidates: list[Memory] = Field(default_factory=list)
+    applied_modifiers: list[PolicyModifier] = Field(default_factory=list)
 
 
 class NPCState(BaseModel):
@@ -145,10 +262,30 @@ class AgentTrace(BaseModel):
     fallback_used: bool = False
 
 
+class SocialEventTrace(BaseModel):
+    id: int
+    turn: int
+    actor_id: str = "player"
+    provider: Literal["cli", "openai", "deterministic-mock"]
+    player_input: str
+    classification: SocialImpactClassification
+    requested_classification: SocialImpactClassification | None = None
+    policy_outcome: SocialPolicyOutcome
+    guardrails: list[GuardrailCheck] = Field(default_factory=list)
+    fallback_used: bool = False
+
+
 class FallbackNotice(BaseModel):
     id: int
     turn: int
-    stage: Literal["intent_provider", "intent_guardrail", "decision_provider", "decision_guardrail"]
+    stage: Literal[
+        "intent_provider",
+        "intent_guardrail",
+        "decision_provider",
+        "decision_guardrail",
+        "social_impact_provider",
+        "social_impact_guardrail",
+    ]
     provider: Literal["cli", "openai", "deterministic-mock"]
     reason: str
     created_at: datetime
@@ -165,6 +302,9 @@ class GameSnapshot(BaseModel):
     ai_model: str
     objective: list[str]
     npcs: list[NPCState]
+    relationships: list[RelationshipState]
+    world_objects: list[WorldObjectState]
+    social_events: list[SocialEventTrace]
     evidences: list[Evidence]
     events: list[EventLogEntry]
     agent_traces: list[AgentTrace]
@@ -187,6 +327,8 @@ class ActionResponse(BaseModel):
     intent_provider: Literal["cli", "openai", "deterministic-mock", "ui"]
     intent_confidence: float = Field(ge=0, le=1)
     intent_fallback_used: bool = False
+    social_impact_provider: Literal["cli", "openai", "deterministic-mock"] | None = None
+    social_impact_fallback_used: bool = False
 
 
 class IncidentReportRequest(BaseModel):
