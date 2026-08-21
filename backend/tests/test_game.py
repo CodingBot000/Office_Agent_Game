@@ -88,6 +88,30 @@ def test_target_hint_guides_semantic_question_without_changing_player_text() -> 
     assert "Critical Issue" in response.message
 
 
+def test_request_evidence_reveals_requested_warning() -> None:
+    class FixedEvidenceIntentProvider:
+        name = "cli"
+        model = "gpt-5.6-luna"
+
+        def classify(self, context: object) -> IntentClassification:
+            return IntentClassification(
+                intent="request_evidence",
+                target_npc_id="qa_01",
+                evidence_id="qa_warning_message",
+                confidence=0.95,
+            )
+
+    engine = GameEngine(intent_provider=FixedEvidenceIntentProvider())
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "배포 전 경고 메시지를 보여줄 수 있나요?")
+
+    warning = next(evidence for evidence in response.snapshot.evidences if evidence.id == "qa_warning_message")
+    assert response.classified_action == "request_evidence"
+    assert warning.discovered is True
+    assert "API response mismatch" in response.message
+
+
 def test_qa_desk_location_button_command_moves_to_qa_desk() -> None:
     engine = GameEngine()
     snapshot = engine.create_session()

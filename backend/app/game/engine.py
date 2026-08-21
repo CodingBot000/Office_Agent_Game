@@ -257,6 +257,8 @@ class GameEngine:
             return self._inspect_evidence(session, text, intent.evidence_id)
         if action == "show_evidence":
             return self._show_evidence(session, target_id, intent.evidence_id)
+        if action == "request_evidence":
+            return self._request_evidence(session, target_id, intent.evidence_id, text)
         if action == "ask":
             return self._ask_npc(session, target_id, text)
         if action == "accuse":
@@ -302,6 +304,26 @@ class GameEngine:
             if target == "backend_01" and evidence_id == "qa_warning_message":
                 self._update_backend_after_warning(session)
                 return "Backend Developer가 QA 경고를 확인했습니다. 위험을 알고도 배포했는지 되짚기 시작합니다."
+        return evidence.content
+
+    def _request_evidence(
+        self,
+        session: GameSession,
+        target_id: str | None,
+        evidence_id: str | None,
+        text: str,
+    ) -> str:
+        evidence_id = evidence_id or self._evidence_from_text(text) or "qa_warning_message"
+        self._discover_evidence(session, evidence_id)
+        evidence = session.evidences[evidence_id]
+        actor = session.npcs[target_id].name if target_id in session.npcs else "System"
+        self._append_event(
+            session,
+            actor,
+            f"{evidence.title}를 공개했습니다.\n{evidence.content}",
+            "evidence",
+            target_id,
+        )
         return evidence.content
 
     def _ask_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:

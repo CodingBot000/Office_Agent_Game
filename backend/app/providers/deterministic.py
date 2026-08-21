@@ -15,7 +15,9 @@ class DeterministicIntentProvider:
         if any(keyword in normalized for keyword in ("최종 보고", "보고 제출", "report", "결론 제출")):
             return self._result("report_conclusion", target_npc_id, 0.8)
         if any(keyword in normalized for keyword in ("증거", "메시지 기록", "로그 확인", "기록 확인", "inspect", "조사")):
-            if any(keyword in normalized for keyword in ("보여", "제시", "전달", "공개", "backend", "백엔드")):
+            if any(keyword in normalized for keyword in ("보여", "보여줘", "보여줄", "확인", "요청", "알려")):
+                return self._result("request_evidence", target_npc_id, 0.8, self._resolve_evidence(normalized))
+            if any(keyword in normalized for keyword in ("제시", "전달", "공개", "backend", "백엔드")):
                 return self._result("show_evidence", target_npc_id, 0.8, self._resolve_evidence(normalized))
             return self._result("inspect", target_npc_id, 0.8, self._resolve_evidence(normalized))
         if any(keyword in normalized for keyword in ("회의", "모두", "summon")):
