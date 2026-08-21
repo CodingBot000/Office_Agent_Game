@@ -735,7 +735,9 @@ function SocialInspectorPanel({
             </div>
           ))}
         </div>
-        <p className="policy-engine-note">POLICY ENGINE · deterministic server policy applied normally</p>
+        {!trace.fallback_used && (
+          <p className="policy-engine-note">POLICY ENGINE · deterministic server policy applied normally</p>
+        )}
         {trace.fallback_used && (
           <p className="fallback-note">
             Deterministic fallback used after provider/guardrail failure.

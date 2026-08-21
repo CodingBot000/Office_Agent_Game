@@ -94,6 +94,10 @@ def test_keyboard_throw_applies_relationship_object_and_hr_policy() -> None:
     assert keyboard.condition == "damaged"
     assert response.snapshot.incident_status == "HR_ESCALATED"
     assert qa.important_memories
+    assert any(
+        event.actor_id == "qa_01" and "HR에 보고" in event.message
+        for event in response.snapshot.events
+    )
 
 
 def test_observable_verbal_pressure_affects_witnesses_less_than_target() -> None:

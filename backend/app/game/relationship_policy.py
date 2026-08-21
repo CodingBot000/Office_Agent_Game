@@ -152,18 +152,18 @@ class RelationshipPolicyEngine:
                 WorldEvent(
                     event_type="object_damaged",
                     target_id=classification.object_id,
-                    detail="The involved office object was damaged by deliberate aggression.",
+                    detail="공격적인 행동으로 관련 사무용품이 손상됐습니다.",
                 )
             )
         if family == "physical_assault":
             events.extend(
                 [
-                    WorldEvent(event_type="security_called", detail="Security was called after physical assault."),
-                    WorldEvent(event_type="dialogue_refused", detail="The direct target refuses normal dialogue."),
+                    WorldEvent(event_type="security_called", detail="신체 공격으로 Security가 호출됐습니다."),
+                    WorldEvent(event_type="dialogue_refused", detail="직접 피해자가 정상적인 대화를 거부합니다."),
                 ]
             )
         elif family in SEVERE_ACTION_FAMILIES and classification.severity >= 4:
-            events.append(WorldEvent(event_type="hr_escalated", detail="The incident was escalated to HR."))
+            events.append(WorldEvent(event_type="hr_escalated", detail="갈등 사건이 HR에 보고됐습니다."))
         if family == "public_humiliation" and classification.severity >= 4:
-            events.append(WorldEvent(event_type="meeting_interrupted", detail="The meeting was interrupted."))
+            events.append(WorldEvent(event_type="meeting_interrupted", detail="공개적인 갈등으로 회의가 중단됐습니다."))
         return events
