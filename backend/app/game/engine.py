@@ -71,6 +71,10 @@ class SessionNotFoundError(KeyError):
     pass
 
 
+class InvalidIntentHintError(ValueError):
+    pass
+
+
 class GameEngine:
     """Authoritative game loop with a replaceable agent decision provider."""
 
@@ -103,7 +107,12 @@ class GameEngine:
         self._sessions.pop(session_id, None)
         return self.create_session()
 
-    def submit_action(self, session_id: str, text: str) -> ActionResponse:
+    def submit_action(
+        self,
+        session_id: str,
+        text: str,
+        intent_hint: IntentClassification | None = None,
+    ) -> ActionResponse:
         session = self.get_session(session_id)
         if session.completed:
             return ActionResponse(
@@ -116,13 +125,19 @@ class GameEngine:
 
         session.turn += 1
         self._append_event(session, "Player", text.strip(), "input")
-        intent, intent_fallback = self._classify_intent(session, text)
+        if intent_hint is not None:
+            intent = self._validate_intent_hint(session, intent_hint)
+            intent_fallback = False
+            intent_provider = "ui"
+        else:
+            intent, intent_fallback = self._classify_intent(session, text)
+            intent_provider = self.intent_provider.name
         message = self._handle_action(session, intent, text)
         return ActionResponse(
             snapshot=self.snapshot(session),
             classified_action=intent.intent,
             message=message,
-            intent_provider=self.intent_provider.name,
+            intent_provider=intent_provider,
             intent_confidence=intent.confidence,
             intent_fallback_used=intent_fallback,
         )
@@ -192,6 +207,15 @@ class GameEngine:
             provider_fallback = True
         validated, validation_fallback = self._validate_intent(session, context, candidate)
         return validated, provider_fallback or validation_fallback
+
+    def _validate_intent_hint(self, session: GameSession, candidate: IntentClassification) -> IntentClassification:
+        if candidate.intent != "move":
+            raise InvalidIntentHintError("Only move intent hints are accepted from Office controls.")
+        if candidate.location not in ("meeting_room", "dev_area", "qa_desk", "pm_desk"):
+            raise InvalidIntentHintError("Office control requested an unknown location.")
+        if candidate.target_npc_id is not None or candidate.evidence_id is not None:
+            raise InvalidIntentHintError("Move intent hints cannot target NPCs or evidence.")
+        return candidate.model_copy(update={"confidence": 1.0})
 
     def _validate_intent(
         self,

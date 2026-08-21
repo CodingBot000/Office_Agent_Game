@@ -11,6 +11,14 @@ class FixedIntentProvider:
         return IntentClassification(intent="ask", target_npc_id="qa_01", confidence=0.99)
 
 
+class FailingIntentProvider:
+    name = "cli"
+    model = "gpt-5.5"
+
+    def classify(self, context: object) -> IntentClassification:
+        raise AssertionError("Office move hint must bypass the Intent Agent")
+
+
 def test_session_starts_with_private_npc_knowledge() -> None:
     engine = GameEngine()
     snapshot = engine.create_session()
@@ -74,6 +82,25 @@ def test_qa_desk_location_button_command_moves_to_qa_desk() -> None:
     assert response.classified_action == "move"
     assert response.snapshot.current_location == "qa_desk"
     assert response.snapshot.events[-1].message == "QA Desk로 이동했습니다."
+
+
+def test_office_move_hint_bypasses_intent_provider() -> None:
+    engine = GameEngine(
+        provider=DeterministicDecisionProvider(),
+        intent_provider=FailingIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(
+        snapshot.session_id,
+        "QA Desk로 이동한다.",
+        IntentClassification(intent="move", location="qa_desk", confidence=1.0),
+    )
+
+    assert response.classified_action == "move"
+    assert response.intent_provider == "ui"
+    assert response.intent_fallback_used is False
+    assert response.snapshot.current_location == "qa_desk"
 
 
 def test_evidence_propagates_to_backend_belief() -> None:

@@ -124,7 +124,15 @@ export interface ActionResponse {
   snapshot: GameSnapshot;
   classified_action: string;
   message: string;
-  intent_provider: "cli" | "openai" | "deterministic-mock";
+  intent_provider: "cli" | "openai" | "deterministic-mock" | "ui";
   intent_confidence: number;
   intent_fallback_used: boolean;
+}
+
+export interface IntentClassification {
+  intent: string;
+  target_npc_id?: string | null;
+  evidence_id?: string | null;
+  location?: "meeting_room" | "dev_area" | "qa_desk" | "pm_desk" | null;
+  confidence?: number;
 }

@@ -147,13 +147,14 @@ class GameSnapshot(BaseModel):
 
 class ActionRequest(BaseModel):
     text: str = Field(min_length=1, max_length=500)
+    intent_hint: IntentClassification | None = None
 
 
 class ActionResponse(BaseModel):
     snapshot: GameSnapshot
     classified_action: str
     message: str
-    intent_provider: Literal["cli", "openai", "deterministic-mock"]
+    intent_provider: Literal["cli", "openai", "deterministic-mock", "ui"]
     intent_confidence: float = Field(ge=0, le=1)
     intent_fallback_used: bool = False
 

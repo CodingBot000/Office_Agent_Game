@@ -1,4 +1,4 @@
-import type { ActionResponse, GameSnapshot } from "./types";
+import type { ActionResponse, GameSnapshot, IntentClassification } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -16,10 +16,10 @@ export function startSession(): Promise<GameSnapshot> {
   return request<GameSnapshot>("/api/v1/sessions", { method: "POST" });
 }
 
-export function submitAction(sessionId: string, text: string): Promise<ActionResponse> {
+export function submitAction(sessionId: string, text: string, intentHint?: IntentClassification): Promise<ActionResponse> {
   return request<ActionResponse>(`/api/v1/sessions/${sessionId}/actions`, {
     method: "POST",
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...(intentHint ? { intent_hint: intentHint } : {}) }),
   });
 }
 

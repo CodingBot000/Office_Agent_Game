@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { resetSession, startSession, submitAction, submitReport } from "./api";
-import type { AgentTrace, GameSnapshot, NPCState } from "./types";
+import type { AgentTrace, GameSnapshot, IntentClassification, NPCState } from "./types";
 
 const quickCommands = [
   "QA에게 배포 전 문제를 질문한다.",
@@ -45,14 +45,14 @@ function App() {
     [selectedNpc?.id, snapshot],
   );
 
-  async function executeCommand(text: string) {
+  async function executeCommand(text: string, intentHint?: IntentClassification) {
     if (!snapshot || !text.trim() || submitting || snapshot.completed) return;
     const submittedText = text.trim();
     setSubmitting(true);
     setError(null);
     setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "pending" });
     try {
-      const response = await submitAction(snapshot.session_id, submittedText);
+      const response = await submitAction(snapshot.session_id, submittedText, intentHint);
       setSnapshot(response.snapshot);
       setPendingCommand(null);
       setLastIntent({
@@ -157,7 +157,7 @@ function App() {
               <button
                 className={`location-item ${snapshot.current_location === "meeting_room" ? "active" : ""}`}
                 type="button"
-                onClick={() => void executeCommand("회의실로 이동한다.")}
+                onClick={() => void executeCommand("회의실로 이동한다.", moveHint("meeting_room"))}
                 disabled={submitting || snapshot.completed}
               >
                 <span className="location-icon">⌂</span>
@@ -167,7 +167,7 @@ function App() {
               <button
                 className={`location-item ${snapshot.current_location === "dev_area" ? "active" : ""}`}
                 type="button"
-                onClick={() => void executeCommand("개발 구역으로 이동한다.")}
+                onClick={() => void executeCommand("개발 구역으로 이동한다.", moveHint("dev_area"))}
                 disabled={submitting || snapshot.completed}
               >
                 <span className="location-icon">▦</span>
@@ -177,7 +177,7 @@ function App() {
               <button
                 className={`location-item ${snapshot.current_location === "qa_desk" ? "active" : ""}`}
                 type="button"
-                onClick={() => void executeCommand("QA Desk로 이동한다.")}
+                onClick={() => void executeCommand("QA Desk로 이동한다.", moveHint("qa_desk"))}
                 disabled={submitting || snapshot.completed}
               >
                 <span className="location-icon">⊙</span>
@@ -187,7 +187,7 @@ function App() {
               <button
                 className={`location-item ${snapshot.current_location === "pm_desk" ? "active" : ""}`}
                 type="button"
-                onClick={() => void executeCommand("PM Desk로 이동한다.")}
+                onClick={() => void executeCommand("PM Desk로 이동한다.", moveHint("pm_desk"))}
                 disabled={submitting || snapshot.completed}
               >
                 <span className="location-icon">▤</span>
@@ -431,9 +431,13 @@ function Score({ label, value }: { label: string; value: number }) {
 
 interface ActionResponseMeta {
   action: string;
-  provider: "cli" | "openai" | "deterministic-mock";
+  provider: "cli" | "openai" | "deterministic-mock" | "ui";
   confidence: number;
   fallback: boolean;
+}
+
+function moveHint(location: NonNullable<IntentClassification["location"]>): IntentClassification {
+  return { intent: "move", location, confidence: 1 };
 }
 
 interface PendingCommand {

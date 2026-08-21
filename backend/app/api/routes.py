@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 
-from app.game.engine import GameEngine, SessionNotFoundError
+from app.game.engine import GameEngine, InvalidIntentHintError, SessionNotFoundError
 from app.models import ActionRequest, ActionResponse, GameSnapshot, IncidentReportRequest
 
 
@@ -21,9 +21,11 @@ def create_router(engine: GameEngine) -> APIRouter:
     @router.post("/sessions/{session_id}/actions", response_model=ActionResponse)
     def submit_action(session_id: str, request: ActionRequest) -> ActionResponse:
         try:
-            return engine.submit_action(session_id, request.text)
+            return engine.submit_action(session_id, request.text, request.intent_hint)
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
+        except InvalidIntentHintError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.post("/sessions/{session_id}/report", response_model=GameSnapshot)
     def submit_report(session_id: str, request: IncidentReportRequest) -> GameSnapshot:
