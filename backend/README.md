@@ -14,7 +14,7 @@ cp .env.example .env
 # Local: existing CLI authentication/session
 AI_PROVIDER=cli
 AI_CLI_COMMAND=codex
-AI_CLI_MODEL=gpt-5.5
+AI_CLI_MODEL=gpt-5.6-luna
 AI_CLI_TIMEOUT_SECONDS=120
 ```
 
