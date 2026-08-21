@@ -1,7 +1,14 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { resetSession, startSession, submitAction, submitReport } from "./api";
-import type { AgentTrace, GameSnapshot, IntentClassification, NPCState } from "./types";
+import type {
+  AgentTrace,
+  GameSnapshot,
+  IntentClassification,
+  NPCState,
+  RelationshipState,
+  SocialEventTrace,
+} from "./types";
 
 const quickCommands = [
   { id: "qa-ask", targetLabel: "QA", targetNpcId: "qa_01", dialogue: "배포전에 무슨 문제가 있던거죠?" },
@@ -45,6 +52,28 @@ function App() {
       null,
     [selectedNpc?.id, snapshot],
   );
+  const selectedRelationship = useMemo<RelationshipState | null>(
+    () =>
+      snapshot?.relationships.find(
+        (relationship) => relationship.source_id === selectedNpc?.id && relationship.target_id === "player",
+      ) ?? null,
+    [selectedNpc?.id, snapshot],
+  );
+  const latestSocialTrace = useMemo<SocialEventTrace | null>(
+    () =>
+      snapshot?.social_events
+        .slice()
+        .reverse()
+        .find((trace) => {
+          const selectedId = selectedNpc?.id;
+          if (!selectedId) return false;
+          return trace.classification.direct_target_ids.includes(selectedId)
+            || trace.classification.affected_target_ids.includes(selectedId)
+            || trace.requested_classification?.direct_target_ids.includes(selectedId)
+            || trace.policy_outcome.relationship_effects.some((effect) => effect.source_id === selectedId);
+        }) ?? null,
+    [selectedNpc?.id, snapshot],
+  );
   const latestFallback = snapshot?.fallback_notices[snapshot.fallback_notices.length - 1] ?? null;
 
   async function executeCommand(text: string, intentHint?: IntentClassification, targetHintOverride?: string | null) {
@@ -62,6 +91,8 @@ function App() {
         provider: response.intent_provider,
         confidence: response.intent_confidence,
         fallback: response.intent_fallback_used,
+        socialProvider: response.social_impact_provider,
+        socialFallback: response.social_impact_fallback_used,
       });
       setCommand("");
       setTargetHint(null);
@@ -76,7 +107,7 @@ function App() {
 
   async function runCommand(event: FormEvent) {
     event.preventDefault();
-    await executeCommand(command, undefined, targetHint);
+    await executeCommand(command, undefined, targetHint ?? selectedNpc?.id ?? null);
   }
 
   async function handleReset() {
@@ -322,6 +353,7 @@ function App() {
               <p className="intent-meta">
                 INTENT <strong>{lastIntent.action}</strong> · {lastIntent.provider} · {Math.round(lastIntent.confidence * 100)}% confidence
                 {lastIntent.fallback ? " · fallback" : ""}
+                {lastIntent.socialProvider ? ` · SOCIAL ${lastIntent.socialProvider}${lastIntent.socialFallback ? " fallback" : ""}` : ""}
               </p>
             )}
           </div>
@@ -365,9 +397,41 @@ function App() {
               <div className="state-grid">
                 <Metric label="EMOTION" value={selectedNpc.dynamic_state.emotion} />
                 <Metric label="STRESS" value={`${selectedNpc.dynamic_state.stress}%`} />
-                <Metric label="TRUST" value={`${selectedNpc.dynamic_state.trust_toward_player}`} />
+                <Metric label="TRUST" value={`${selectedRelationship?.trust ?? selectedNpc.dynamic_state.trust_toward_player}`} />
                 <Metric label="COOPERATION" value={`${selectedNpc.dynamic_state.cooperation}%`} />
               </div>
+
+              {selectedRelationship && (
+                <InfoBlock title="RELATIONSHIP TO PLAYER">
+                  <div className="relationship-grid">
+                    <Metric label="TRUST" value={`${selectedRelationship.trust}`} />
+                    <Metric label="TENSION" value={`${selectedRelationship.tension}`} />
+                    <Metric label="RESPECT" value={`${selectedRelationship.respect}`} />
+                    <Metric label="FEAR" value={`${selectedRelationship.fear}`} />
+                    <Metric label="GRIEVANCE" value={`${selectedRelationship.grievance}`} />
+                    <Metric label="REPAIR" value={selectedRelationship.repair_stage} />
+                  </div>
+                  {(selectedRelationship.trust_ceiling !== null || selectedRelationship.fear_floor > 0) && (
+                    <p className="relationship-restriction">
+                      Active restriction · trust ceiling {selectedRelationship.trust_ceiling ?? "none"} · fear floor {selectedRelationship.fear_floor}
+                    </p>
+                  )}
+                  {snapshot.dialogue_refused_npc_ids.includes(selectedNpc.id) && (
+                    <p className="dialogue-refused">NORMAL DIALOGUE REFUSED · mediation required</p>
+                  )}
+                </InfoBlock>
+              )}
+
+              <InfoBlock title="OWNED WORLD OBJECTS">
+                <div className="world-object-list">
+                  {snapshot.world_objects.filter((item) => item.owner_id === selectedNpc.id).map((item) => (
+                    <div className="world-object-row" key={item.id}>
+                      <span className={`object-condition ${item.condition}`}>{item.condition}</span>
+                      <div><strong>{item.name}</strong><small>{item.id} · {item.location}</small></div>
+                    </div>
+                  ))}
+                </div>
+              </InfoBlock>
 
               <InfoBlock title="KNOWN FACTS">
                 <ul className="compact-list">
@@ -423,7 +487,13 @@ function App() {
               </form>
                 </>
               ) : (
-                <AgentInspectorPanel latestTrace={latestTrace} selectedNpc={selectedNpc} />
+                <AgentInspectorPanel
+                  latestTrace={latestTrace}
+                  latestSocialTrace={latestSocialTrace}
+                  selectedNpc={selectedNpc}
+                  selectedRelationship={selectedRelationship}
+                  snapshot={snapshot}
+                />
               )}
             </div>
           )}
@@ -433,7 +503,30 @@ function App() {
   );
 }
 
-function AgentInspectorPanel({ latestTrace, selectedNpc }: { latestTrace: AgentTrace | null; selectedNpc: NPCState }) {
+function AgentInspectorPanel({
+  latestTrace,
+  latestSocialTrace,
+  selectedNpc,
+  selectedRelationship,
+  snapshot,
+}: {
+  latestTrace: AgentTrace | null;
+  latestSocialTrace: SocialEventTrace | null;
+  selectedNpc: NPCState;
+  selectedRelationship: RelationshipState | null;
+  snapshot: GameSnapshot;
+}) {
+  if (latestSocialTrace && (!latestTrace || latestSocialTrace.turn >= latestTrace.turn)) {
+    return (
+      <SocialInspectorPanel
+        trace={latestSocialTrace}
+        selectedNpc={selectedNpc}
+        selectedRelationship={selectedRelationship}
+        snapshot={snapshot}
+      />
+    );
+  }
+
   if (!latestTrace) {
     return (
       <div className="empty-inspector">
@@ -535,6 +628,125 @@ function AgentInspectorPanel({ latestTrace, selectedNpc }: { latestTrace: AgentT
   );
 }
 
+function SocialInspectorPanel({
+  trace,
+  selectedNpc,
+  selectedRelationship,
+  snapshot,
+}: {
+  trace: SocialEventTrace;
+  selectedNpc: NPCState;
+  selectedRelationship: RelationshipState | null;
+  snapshot: GameSnapshot;
+}) {
+  const classification = trace.classification;
+  const npcNameById = new Map(snapshot.npcs.map((npc) => [npc.id, npc.name]));
+  const objectById = new Map(snapshot.world_objects.map((item) => [item.id, item]));
+  const object = classification.object_id ? objectById.get(classification.object_id) : null;
+
+  return (
+    <>
+      <div className="inspector-title-row">
+        <div>
+          <span className="eyebrow">AGENT INSPECTOR</span>
+          <h2>Social Policy Trace</h2>
+          <p>{selectedNpc.name} · turn {String(trace.turn).padStart(2, "0")}</p>
+        </div>
+        <span className="trace-badge policy">{trace.provider}</span>
+      </div>
+
+      <InfoBlock title="SOCIAL IMPACT">
+        <div className="trace-block">
+          <div className="trace-line"><span>ACTION FAMILY</span><b>{classification.action_family}</b></div>
+          <div className="trace-line"><span>SEVERITY</span><b>{classification.severity} / 5</b></div>
+          <div className="trace-line"><span>INTENTIONALITY</span><b>{classification.intentionality}</b></div>
+          <div className="trace-line"><span>CONDUCT</span><b className={`conduct-${trace.policy_outcome.conduct_level}`}>{trace.policy_outcome.conduct_level}</b></div>
+          <p className="trace-summary">{trace.player_input}</p>
+          <p className="reason-codes">{classification.reason_codes.join(" · ") || "no reason code"}</p>
+        </div>
+      </InfoBlock>
+
+      <InfoBlock title="TARGETS & OBJECT">
+        <div className="trace-block">
+          <div className="trace-line">
+            <span>DIRECT</span>
+            <b>{classification.direct_target_ids.map((id) => npcNameById.get(id) ?? id).join(", ") || "none"}</b>
+          </div>
+          <div className="trace-line">
+            <span>AFFECTED</span>
+            <b>{classification.affected_target_ids.map((id) => npcNameById.get(id) ?? id).join(", ") || "none"}</b>
+          </div>
+          <div className="trace-line"><span>OBJECT</span><b>{object?.name ?? classification.object_id ?? "none"}</b></div>
+          {object && <p className="trace-summary">owner {npcNameById.get(object.owner_id ?? "") ?? object.owner_id ?? "shared"} · {object.condition} · {object.location}</p>}
+        </div>
+      </InfoBlock>
+
+      <InfoBlock title="RELATIONSHIP POLICY">
+        <div className="relationship-effect-list">
+          {trace.policy_outcome.relationship_effects.map((effect) => (
+            <div className="relationship-effect-row" key={`${effect.source_id}-${effect.target_id}`}>
+              <strong>{npcNameById.get(effect.source_id) ?? effect.source_id} → Player</strong>
+              <span>trust {formatDelta(effect.trust_delta)} · tension {formatDelta(effect.tension_delta)}</span>
+              <span>respect {formatDelta(effect.respect_delta)} · fear {formatDelta(effect.fear_delta)} · grievance {formatDelta(effect.grievance_delta)}</span>
+              <small>{effect.reason_codes.join(" · ")}</small>
+            </div>
+          ))}
+        </div>
+        {selectedRelationship && (
+          <p className="policy-final-state">
+            Current {selectedNpc.name}: trust {selectedRelationship.trust} · tension {selectedRelationship.tension} · respect {selectedRelationship.respect} · fear {selectedRelationship.fear} · grievance {selectedRelationship.grievance}
+          </p>
+        )}
+      </InfoBlock>
+
+      <InfoBlock title="MODIFIERS">
+        {trace.policy_outcome.applied_modifiers.length > 0 ? (
+          <div className="modifier-list">
+            {trace.policy_outcome.applied_modifiers.map((modifier) => (
+              <span key={modifier.code}>{modifier.code} ×{modifier.multiplier.toFixed(1)}</span>
+            ))}
+          </div>
+        ) : (
+          <p className="trace-summary">No harmful-action multiplier applied.</p>
+        )}
+      </InfoBlock>
+
+      <InfoBlock title="CONSEQUENCES">
+        {trace.policy_outcome.mandatory_world_events.length > 0 ? (
+          <ul className="compact-list">
+            {trace.policy_outcome.mandatory_world_events.map((event, index) => (
+              <li key={`${event.event_type}-${index}`}>
+                <span>{event.event_type.replaceAll("_", " ")}</span>
+                <small>{event.detail}</small>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="trace-summary">No mandatory world event.</p>
+        )}
+      </InfoBlock>
+
+      <InfoBlock title="GUARDRAIL RESULT">
+        <div className="guardrail-list">
+          {trace.guardrails.map((check) => (
+            <div className="guardrail-row" key={check.name} title={check.detail}>
+              <span className={check.passed ? "pass" : "fail"}>{check.passed ? "✓" : "×"}</span>
+              <span>{check.name.replaceAll("_", " ")}</span>
+            </div>
+          ))}
+        </div>
+        <p className="policy-engine-note">POLICY ENGINE · deterministic server policy applied normally</p>
+        {trace.fallback_used && (
+          <p className="fallback-note">
+            Deterministic fallback used after provider/guardrail failure.
+            {trace.requested_classification ? ` Rejected: ${trace.requested_classification.action_family}.` : ""}
+          </p>
+        )}
+      </InfoBlock>
+    </>
+  );
+}
+
 function formatDelta(value: number) {
   return value > 0 ? `+${value}` : String(value);
 }
@@ -556,6 +768,8 @@ interface ActionResponseMeta {
   provider: "cli" | "openai" | "deterministic-mock" | "ui";
   confidence: number;
   fallback: boolean;
+  socialProvider: "cli" | "openai" | "deterministic-mock" | null;
+  socialFallback: boolean;
 }
 
 function moveHint(location: NonNullable<IntentClassification["location"]>): IntentClassification {

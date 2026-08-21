@@ -16,7 +16,20 @@ def test_openapi_contains_unity_client_contract() -> None:
 
     snapshot = schema["components"]["schemas"]["GameSnapshot"]
     required = set(snapshot["required"])
-    assert {"session_id", "turn", "current_location", "npcs", "evidences", "events", "agent_traces", "fallback_notices"}.issubset(required)
+    assert {
+        "session_id",
+        "turn",
+        "current_location",
+        "npcs",
+        "relationships",
+        "world_objects",
+        "social_events",
+        "dialogue_refused_npc_ids",
+        "evidences",
+        "events",
+        "agent_traces",
+        "fallback_notices",
+    }.issubset(required)
 
     npc_state = schema["components"]["schemas"]["NPCState"]
     assert "known_fact_ids" in npc_state["properties"]
@@ -26,3 +39,30 @@ def test_openapi_contains_unity_client_contract() -> None:
 
     agent_trace = schema["components"]["schemas"]["AgentTrace"]
     assert {"known_fact_ids", "requested_decision"}.issubset(agent_trace["properties"])
+
+    relationship = schema["components"]["schemas"]["RelationshipState"]
+    assert {
+        "source_id",
+        "target_id",
+        "trust",
+        "tension",
+        "respect",
+        "fear",
+        "grievance",
+        "repair_stage",
+        "trust_ceiling",
+        "fear_floor",
+    }.issubset(relationship["properties"])
+
+    social_impact = schema["components"]["schemas"]["SocialImpactClassification"]
+    assert {"action_family", "direct_target_ids", "object_id", "severity", "reason_codes"}.issubset(
+        social_impact["properties"]
+    )
+
+    social_trace = schema["components"]["schemas"]["SocialEventTrace"]
+    assert {"classification", "requested_classification", "policy_outcome", "guardrails", "fallback_used"}.issubset(
+        social_trace["properties"]
+    )
+
+    action_response = schema["components"]["schemas"]["ActionResponse"]
+    assert {"social_impact_provider", "social_impact_fallback_used"}.issubset(action_response["properties"])

@@ -42,6 +42,25 @@ class FailingSocialProvider:
         raise ProviderError("social classifier unavailable")
 
 
+class DuplicateTargetSocialProvider:
+    name = "cli"
+    model = "gpt-5.6-luna"
+
+    def classify_social_impact(self, context: object) -> SocialImpactClassification:
+        return SocialImpactClassification(
+            action_family="verbal_pressure",
+            direct_target_ids=["qa_01", "qa_01"],
+            affected_target_ids=["qa_01"],
+            object_id=None,
+            severity=3,
+            intentionality="deliberate",
+            observable=True,
+            evidence_based=False,
+            reason_codes=["coercion"],
+            confidence=0.9,
+        )
+
+
 def move_to_qa_desk(engine: GameEngine, session_id: str) -> None:
     engine.submit_action(
         session_id,
@@ -128,6 +147,21 @@ def test_social_provider_failure_uses_visible_deterministic_fallback() -> None:
     assert response.social_impact_fallback_used is True
     assert response.snapshot.social_events[-1].classification.action_family == "verbal_pressure"
     assert response.snapshot.fallback_notices[-1].stage == "social_impact_provider"
+
+
+def test_social_trace_normalizes_duplicate_target_roles() -> None:
+    engine = GameEngine(
+        intent_provider=SocialIntentProvider(),
+        social_impact_provider=DuplicateTargetSocialProvider(),
+    )
+    started = engine.create_session()
+    move_to_qa_desk(engine, started.session_id)
+
+    response = engine.submit_action(started.session_id, "QA에게 당장 답하라고 윽박지른다.")
+
+    classification = response.snapshot.social_events[-1].classification
+    assert classification.direct_target_ids == ["qa_01"]
+    assert classification.affected_target_ids == []
 
 
 def test_physical_assault_blocks_dialogue_until_recovery() -> None:

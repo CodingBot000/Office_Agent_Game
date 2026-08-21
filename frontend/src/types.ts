@@ -36,6 +36,31 @@ export interface RelationshipUpdate {
   tension_delta: number;
 }
 
+export interface RelationshipState {
+  source_id: string;
+  target_id: string;
+  trust: number;
+  tension: number;
+  respect: number;
+  fear: number;
+  grievance: number;
+  repair_stage: "none" | "acknowledged" | "apologized" | "repaired" | "mediated";
+  trust_ceiling: number | null;
+  fear_floor: number;
+  last_changed_turn: number;
+}
+
+export interface WorldObjectState {
+  id: string;
+  name: string;
+  owner_id: string | null;
+  location: "meeting_room" | "dev_area" | "qa_desk" | "pm_desk";
+  portable: boolean;
+  destructible: boolean;
+  holder_id: string | null;
+  condition: "normal" | "damaged" | "destroyed";
+}
+
 export interface NPCState {
   id: string;
   name: string;
@@ -106,10 +131,74 @@ export interface AgentTrace {
   fallback_used: boolean;
 }
 
+export interface SocialImpactClassification {
+  action_family: string;
+  direct_target_ids: string[];
+  affected_target_ids: string[];
+  object_id: string | null;
+  severity: number;
+  intentionality: "accidental" | "reckless" | "deliberate";
+  observable: boolean;
+  evidence_based: boolean;
+  reason_codes: string[];
+  confidence: number;
+}
+
+export interface RelationshipEffect {
+  source_id: string;
+  target_id: string;
+  trust_delta: number;
+  tension_delta: number;
+  respect_delta: number;
+  fear_delta: number;
+  grievance_delta: number;
+  reason_codes: string[];
+}
+
+export interface EmotionEffect {
+  npc_id: string;
+  emotion: string;
+  stress_delta: number;
+  cooperation_delta: number;
+}
+
+export interface PolicyModifier {
+  code: string;
+  multiplier: number;
+}
+
+export interface WorldEvent {
+  event_type: string;
+  target_id: string | null;
+  detail: string;
+}
+
+export interface SocialPolicyOutcome {
+  conduct_level: "permitted" | "inappropriate" | "misconduct" | "severe_misconduct";
+  relationship_effects: RelationshipEffect[];
+  emotion_effects: EmotionEffect[];
+  mandatory_world_events: WorldEvent[];
+  memory_effects: Array<{ npc_id: string; memory: Memory }>;
+  applied_modifiers: PolicyModifier[];
+}
+
+export interface SocialEventTrace {
+  id: number;
+  turn: number;
+  actor_id: string;
+  provider: "cli" | "openai" | "deterministic-mock";
+  player_input: string;
+  classification: SocialImpactClassification;
+  requested_classification: SocialImpactClassification | null;
+  policy_outcome: SocialPolicyOutcome;
+  guardrails: GuardrailCheck[];
+  fallback_used: boolean;
+}
+
 export interface FallbackNotice {
   id: number;
   turn: number;
-  stage: "intent_provider" | "intent_guardrail" | "decision_provider" | "decision_guardrail";
+  stage: "intent_provider" | "intent_guardrail" | "decision_provider" | "decision_guardrail" | "social_impact_provider" | "social_impact_guardrail";
   provider: "cli" | "openai" | "deterministic-mock";
   reason: string;
   created_at: string;
@@ -132,6 +221,10 @@ export interface GameSnapshot {
   ai_model: string;
   objective: string[];
   npcs: NPCState[];
+  relationships: RelationshipState[];
+  world_objects: WorldObjectState[];
+  social_events: SocialEventTrace[];
+  dialogue_refused_npc_ids: string[];
   evidences: Evidence[];
   events: EventLogEntry[];
   agent_traces: AgentTrace[];
@@ -148,6 +241,8 @@ export interface ActionResponse {
   intent_provider: "cli" | "openai" | "deterministic-mock" | "ui";
   intent_confidence: number;
   intent_fallback_used: boolean;
+  social_impact_provider: "cli" | "openai" | "deterministic-mock" | null;
+  social_impact_fallback_used: boolean;
 }
 
 export interface IntentClassification {

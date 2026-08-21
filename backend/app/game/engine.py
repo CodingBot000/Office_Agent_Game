@@ -523,6 +523,12 @@ class GameEngine:
             for npc_id in dict.fromkeys(classification.affected_target_ids)
             if npc_id not in direct_target_ids
         ]
+        classification = classification.model_copy(
+            update={
+                "direct_target_ids": direct_target_ids,
+                "affected_target_ids": affected_target_ids,
+            }
+        )
         object_owner_id = (
             session.world_objects[classification.object_id].owner_id
             if classification.object_id in session.world_objects
@@ -940,13 +946,18 @@ class GameEngine:
             for npc_id in classification.direct_target_ids
             if npc_id in session.npcs
         ) or "대상"
+        witness_phrase = (
+            " 및 목격자"
+            if any("witness" in effect.reason_codes for effect in outcome.relationship_effects)
+            else ""
+        )
         messages = {
             "verbal_pressure": f"{target_names}에게 강압적 언행이 가해져 긴장과 불만이 증가했습니다.",
             "insult": f"{target_names}이 모욕을 받아 신뢰와 존중이 하락했습니다.",
             "public_humiliation": f"{target_names}에 대한 공개 망신이 관계와 팀 분위기를 훼손했습니다.",
             "threat": f"{target_names}이 위협을 느꼈으며 사건이 공식적으로 escalated 됐습니다.",
             "property_interference": f"{target_names}의 물건에 대한 침해가 관계에 반영됐습니다.",
-            "property_aggression": f"물건을 이용한 공격적 행동으로 {target_names}과 목격자의 관계가 악화됐습니다.",
+            "property_aggression": f"물건을 이용한 공격적 행동으로 {target_names}{witness_phrase}의 관계가 악화됐습니다.",
             "physical_intimidation": f"{target_names}이 물리적 위협을 느껴 정상적인 협력이 어려워졌습니다.",
             "physical_assault": f"{target_names}에 대한 신체 공격으로 Security가 호출되고 정상 대화가 중단됐습니다.",
             "apology": f"{target_names}에게 사과했습니다. 관계는 일부만 회복되며 피해 복구가 필요합니다.",
