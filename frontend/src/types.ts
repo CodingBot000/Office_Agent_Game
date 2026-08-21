@@ -86,7 +86,7 @@ export interface AgentTrace {
   turn: number;
   event: string;
   npc_id: string;
-  provider: "deterministic-mock" | "openai";
+  provider: "cli" | "openai" | "deterministic-mock";
   context_summary: string;
   known_facts: string[];
   retrieved_rules: string[];

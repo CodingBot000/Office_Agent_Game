@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "AI Office Agent API"
     api_prefix: str = "/api/v1"
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
-    ai_provider: Literal["deterministic-mock", "openai"] = "deterministic-mock"
+    ai_provider: Literal["cli", "openai", "deterministic-mock"] = "deterministic-mock"
     openai_api_key: str = ""
     openai_model: str = "replace-with-a-supported-openai-model"
     openai_base_url: str = "https://api.openai.com/v1"

@@ -94,7 +94,7 @@ class AgentTrace(BaseModel):
     turn: int
     event: str
     npc_id: str
-    provider: Literal["deterministic-mock", "openai"] = "deterministic-mock"
+    provider: Literal["cli", "openai", "deterministic-mock"] = "deterministic-mock"
     context_summary: str
     known_facts: list[str] = Field(default_factory=list)
     retrieved_rules: list[str] = Field(default_factory=list)
