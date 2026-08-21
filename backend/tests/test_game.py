@@ -1,7 +1,8 @@
 import logging
 
+from app.game import engine as engine_module
 from app.game.engine import AVAILABLE_ACTIONS, GameEngine
-from app.models import AgentDecision, IncidentReportRequest, IntentClassification, Memory, RelationshipUpdate
+from app.models import AgentDecision, FactDefinition, IncidentReportRequest, IntentClassification, Memory, RelationshipUpdate
 from app.providers.deterministic import DeterministicDecisionProvider
 
 
@@ -231,6 +232,7 @@ def test_relationship_update_is_validated_and_applied() -> None:
         trust_delta=1,
         cooperation_delta=2,
         relationship_updates=[RelationshipUpdate(target_npc_id="backend_01", trust_delta=5, tension_delta=-10)],
+        knowledge_refs=["qa_sent_warning"],
         action_type="dialogue",
         dialogue="관계를 다시 정리해보겠습니다.",
     )
@@ -243,6 +245,113 @@ def test_relationship_update_is_validated_and_applied() -> None:
     assert session.agent_traces[-1].fallback_used is False
 
 
+def test_known_fact_reference_passes_guardrail() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    qa = session.npcs["qa_01"]
+    decision = AgentDecision(
+        npc_id="qa_01",
+        emotion="guarded",
+        stress_delta=0,
+        trust_delta=0,
+        cooperation_delta=0,
+        knowledge_refs=["qa_sent_warning"],
+        action_type="dialogue",
+        dialogue="배포 전에 경고 메시지를 보냈습니다.",
+    )
+
+    engine._apply_decision(session, qa, decision, "knowledge ref pass")
+
+    trace = session.agent_traces[-1]
+    assert trace.fallback_used is False
+    assert trace.decision.knowledge_refs == ["qa_sent_warning"]
+    assert next(check for check in trace.guardrails if check.name == "knowledge_refs_known_by_npc").passed is True
+
+
+def test_unknown_or_private_fact_reference_is_rejected(caplog) -> None:
+    caplog.set_level(logging.WARNING)
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    qa = session.npcs["qa_01"]
+    decision = AgentDecision(
+        npc_id="qa_01",
+        emotion="guarded",
+        stress_delta=0,
+        trust_delta=0,
+        cooperation_delta=0,
+        knowledge_refs=["backend_knew_deploy_risk", "invented_fact_id"],
+        action_type="dialogue",
+        dialogue="백엔드가 위험을 알고 일부러 배포했습니다.",
+    )
+
+    engine._apply_decision(session, qa, decision, "knowledge ref reject")
+
+    trace = session.agent_traces[-1]
+    assert trace.fallback_used is True
+    assert trace.requested_decision is not None
+    assert trace.requested_decision.knowledge_refs == ["backend_knew_deploy_risk", "invented_fact_id"]
+    assert session.fallback_notices[-1].stage == "decision_guardrail"
+    assert session.events[-1].actor == "DETERMINISTIC FALLBACK"
+    assert "knowledge_refs_exist" in caplog.text
+
+
+def test_dialogue_without_knowledge_reference_is_rejected() -> None:
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    qa = session.npcs["qa_01"]
+    decision = AgentDecision(
+        npc_id="qa_01",
+        emotion="guarded",
+        stress_delta=0,
+        trust_delta=0,
+        cooperation_delta=0,
+        action_type="dialogue",
+        dialogue="배포 전에 문제가 있었습니다.",
+    )
+
+    engine._apply_decision(session, qa, decision, "missing knowledge ref")
+
+    trace = session.agent_traces[-1]
+    check = next(item for item in trace.guardrails if item.name == "knowledge_refs_present")
+    assert check.passed is False
+    assert trace.fallback_used is True
+
+
+def test_non_revealable_fact_reference_is_rejected(monkeypatch) -> None:
+    private_fact_id = "qa_private_investigation_note"
+    monkeypatch.setitem(
+        engine_module.FACT_REGISTRY,
+        private_fact_id,
+        FactDefinition(
+            id=private_fact_id,
+            statement="QA has an unreleased private investigation note.",
+            category="evidence",
+            revealable=False,
+        ),
+    )
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    qa = session.npcs["qa_01"]
+    qa.known_fact_ids.append(private_fact_id)
+    decision = AgentDecision(
+        npc_id="qa_01",
+        emotion="guarded",
+        stress_delta=0,
+        trust_delta=0,
+        cooperation_delta=0,
+        knowledge_refs=[private_fact_id],
+        action_type="dialogue",
+        dialogue="비공개 조사 메모의 내용을 공개하겠습니다.",
+    )
+
+    engine._apply_decision(session, qa, decision, "non-revealable fact reject")
+
+    trace = session.agent_traces[-1]
+    check = next(item for item in trace.guardrails if item.name == "knowledge_refs_evidence_valid")
+    assert check.passed is False
+    assert trace.fallback_used is True
+
+
 def test_duplicate_memory_candidate_is_stored_once() -> None:
     engine = GameEngine()
     session = engine.get_session(engine.create_session().session_id)
@@ -253,6 +362,7 @@ def test_duplicate_memory_candidate_is_stored_once() -> None:
         stress_delta=0,
         trust_delta=0,
         cooperation_delta=0,
+        knowledge_refs=["qa_sent_warning"],
         memory_candidate=Memory(summary="Player repeated the same claim.", importance=0.8, turn=1),
         action_type="dialogue",
         dialogue="같은 주장을 다시 들었습니다.",

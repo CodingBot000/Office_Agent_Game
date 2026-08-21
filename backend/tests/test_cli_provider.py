@@ -17,6 +17,7 @@ def make_context() -> DecisionContext:
         turn=1,
         npc=build_initial_npcs()["qa_01"],
         target_npc_id="qa_01",
+        available_facts=("qa_sent_warning: QA sent a warning message before deployment.",),
         available_evidence_ids=("qa_warning_message",),
         incident_rules=tuple(INCIDENT_RULES),
     )

@@ -17,3 +17,12 @@ def test_openapi_contains_unity_client_contract() -> None:
     snapshot = schema["components"]["schemas"]["GameSnapshot"]
     required = set(snapshot["required"])
     assert {"session_id", "turn", "current_location", "npcs", "evidences", "events", "agent_traces", "fallback_notices"}.issubset(required)
+
+    npc_state = schema["components"]["schemas"]["NPCState"]
+    assert "known_fact_ids" in npc_state["properties"]
+
+    agent_decision = schema["components"]["schemas"]["AgentDecision"]
+    assert "knowledge_refs" in agent_decision["properties"]
+
+    agent_trace = schema["components"]["schemas"]["AgentTrace"]
+    assert {"known_fact_ids", "requested_decision"}.issubset(agent_trace["properties"])

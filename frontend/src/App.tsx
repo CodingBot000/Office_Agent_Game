@@ -371,7 +371,12 @@ function App() {
 
               <InfoBlock title="KNOWN FACTS">
                 <ul className="compact-list">
-                  {selectedNpc.known_facts.map((fact) => <li key={fact}>{fact}</li>)}
+                  {selectedNpc.known_facts.map((fact, index) => (
+                    <li key={selectedNpc.known_fact_ids[index] ?? fact}>
+                      <span>{fact}</span>
+                      {selectedNpc.known_fact_ids[index] && <small>{selectedNpc.known_fact_ids[index]}</small>}
+                    </li>
+                  ))}
                 </ul>
               </InfoBlock>
 
@@ -439,6 +444,11 @@ function AgentInspectorPanel({ latestTrace, selectedNpc }: { latestTrace: AgentT
     );
   }
 
+  const groundingDecision = latestTrace.requested_decision ?? latestTrace.decision;
+  const factStatementById = new Map(
+    latestTrace.known_fact_ids.map((factId, index) => [factId, latestTrace.known_facts[index] ?? factId]),
+  );
+
   return (
     <>
       <div className="inspector-title-row">
@@ -458,6 +468,27 @@ function AgentInspectorPanel({ latestTrace, selectedNpc }: { latestTrace: AgentT
         <ul className="compact-list">
           {latestTrace.known_facts.map((fact) => <li key={fact}>{fact}</li>)}
         </ul>
+      </InfoBlock>
+
+      <InfoBlock title="KNOWLEDGE REFERENCES">
+        {groundingDecision.knowledge_refs.length > 0 ? (
+          <div className="knowledge-ref-list">
+            {groundingDecision.knowledge_refs.map((factId) => {
+              const known = latestTrace.known_fact_ids.includes(factId);
+              return (
+                <div className="knowledge-ref-row" key={factId}>
+                  <span className={known ? "pass" : "fail"}>{known ? "✓" : "×"}</span>
+                  <div>
+                    <strong>{factId}</strong>
+                    <p>{factStatementById.get(factId) ?? "Unknown or unauthorized Fact ID"}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="trace-summary">No factual knowledge reference was used.</p>
+        )}
       </InfoBlock>
 
       <InfoBlock title="RETRIEVED RULES">

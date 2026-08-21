@@ -7,7 +7,7 @@ from typing import Callable, get_args
 from uuid import uuid4
 
 from app.config import Settings, get_settings
-from app.game.seed import CANONICAL_TRUTH, INCIDENT_RULES, clone_evidence, clone_npcs
+from app.game.seed import CANONICAL_TRUTH, FACT_REGISTRY, INCIDENT_RULES, LEGACY_FACT_TEXT_TO_ID, clone_evidence, clone_npcs
 from app.models import (
     ActionResponse,
     ActionType,
@@ -34,6 +34,7 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
+CURRENT_SESSION_SCHEMA_VERSION = 3
 
 
 AVAILABLE_ACTIONS = list(get_args(ActionType))
@@ -101,7 +102,11 @@ class GameEngine:
         payload = self.session_repository.load(session_id)
         if payload is None:
             raise SessionNotFoundError(session_id)
-        return self._deserialize_session(payload)
+        migrated_payload, migrated = self._migrate_session_payload(payload)
+        session = self._deserialize_session(migrated_payload)
+        if migrated:
+            self._save_session(session)
+        return session
 
     def reset_session(self, session_id: str) -> GameSnapshot:
         self.session_repository.delete(session_id)
@@ -198,6 +203,7 @@ class GameEngine:
 
     def _serialize_session(self, session: GameSession) -> dict[str, object]:
         return {
+            "schema_version": CURRENT_SESSION_SCHEMA_VERSION,
             "session_id": session.session_id,
             "turn": session.turn,
             "current_location": session.current_location,
@@ -213,6 +219,41 @@ class GameEngine:
             "completed": session.completed,
             "result": session.result.model_dump(mode="json") if session.result else None,
         }
+
+    def _migrate_session_payload(self, payload: dict[str, object]) -> tuple[dict[str, object], bool]:
+        version = int(payload.get("schema_version", 1))
+        if version > CURRENT_SESSION_SCHEMA_VERSION:
+            raise ValueError(f"Unsupported future session schema version: {version}")
+        if version == CURRENT_SESSION_SCHEMA_VERSION:
+            return payload, False
+
+        npc_payload = dict(payload.get("npcs", {}))
+        for npc_id, raw_npc in npc_payload.items():
+            if not isinstance(raw_npc, dict):
+                continue
+            known_fact_ids = [str(item) for item in raw_npc.get("known_fact_ids", [])]
+            if not known_fact_ids:
+                for legacy_fact in raw_npc.get("known_facts", []):
+                    fact_id = LEGACY_FACT_TEXT_TO_ID.get(str(legacy_fact))
+                    if fact_id:
+                        known_fact_ids.append(fact_id)
+                    else:
+                        logger.warning(
+                            "session_migration_unmapped_fact session_id=%s npc_id=%s fact=%s",
+                            payload.get("session_id"),
+                            npc_id,
+                            str(legacy_fact)[:160],
+                        )
+            raw_npc["known_fact_ids"] = list(dict.fromkeys(known_fact_ids))
+            raw_npc["known_facts"] = [
+                FACT_REGISTRY[fact_id].statement
+                for fact_id in raw_npc["known_fact_ids"]
+                if fact_id in FACT_REGISTRY
+            ]
+
+        payload["npcs"] = npc_payload
+        payload["schema_version"] = CURRENT_SESSION_SCHEMA_VERSION
+        return payload, True
 
     def _deserialize_session(self, payload: dict[str, object]) -> GameSession:
         npc_payload = payload.get("npcs", {})
@@ -448,6 +489,11 @@ class GameEngine:
             turn=session.turn,
             npc=npc,
             target_npc_id=npc.id,
+            available_facts=tuple(
+                f"{fact_id}: {FACT_REGISTRY[fact_id].statement}"
+                for fact_id in npc.known_fact_ids
+                if fact_id in FACT_REGISTRY
+            ),
             available_evidence_ids=tuple(session.evidences),
             incident_rules=tuple(INCIDENT_RULES),
         )
@@ -513,9 +559,11 @@ class GameEngine:
                 npc_id=npc.id,
                 provider=self.provider.name,
                 context_summary=f"{npc.name} evaluated the player's latest action using its private knowledge boundary.",
+                known_fact_ids=list(npc.known_fact_ids),
                 known_facts=list(npc.known_facts),
                 retrieved_rules=list(INCIDENT_RULES[:1]) if npc.id == "qa_01" else [],
                 decision=trace_decision,
+                requested_decision=decision if rejected else None,
                 guardrails=guardrails,
                 fallback_used=provider_fallback or fallback_used,
             )
@@ -549,6 +597,31 @@ class GameEngine:
                 name="relationship_targets_valid",
                 passed=all(update.target_npc_id in session.npcs for update in decision.relationship_updates),
                 detail="Relationship updates reference NPCs in the current session.",
+            ),
+            GuardrailCheck(
+                name="knowledge_refs_exist",
+                passed=all(fact_id in FACT_REGISTRY for fact_id in decision.knowledge_refs),
+                detail="Knowledge references exist in the server-owned Fact Registry.",
+            ),
+            GuardrailCheck(
+                name="knowledge_refs_present",
+                passed=bool(decision.knowledge_refs),
+                detail="NPC dialogue decisions include at least one factual grounding reference.",
+            ),
+            GuardrailCheck(
+                name="knowledge_refs_known_by_npc",
+                passed=all(fact_id in npc.known_fact_ids for fact_id in decision.knowledge_refs),
+                detail="Knowledge references are inside the NPC knowledge boundary.",
+            ),
+            GuardrailCheck(
+                name="knowledge_refs_evidence_valid",
+                passed=all(
+                    FACT_REGISTRY[fact_id].revealable
+                    and all(evidence_id in session.evidences for evidence_id in FACT_REGISTRY[fact_id].source_evidence_ids)
+                    for fact_id in decision.knowledge_refs
+                    if fact_id in FACT_REGISTRY
+                ),
+                detail="Knowledge references are revealable and their evidence exists in the current world state.",
             ),
             GuardrailCheck(
                 name="state_ranges_valid",
@@ -627,6 +700,7 @@ class GameEngine:
                 npc_id=backend.id,
                 provider=self.provider.name,
                 context_summary="Backend Developer evaluated newly revealed evidence against its existing belief.",
+                known_fact_ids=list(backend.known_fact_ids),
                 known_facts=list(backend.known_facts),
                 retrieved_rules=list(INCIDENT_RULES),
                 decision=AgentDecision(
@@ -636,6 +710,7 @@ class GameEngine:
                     trust_delta=3,
                     cooperation_delta=0,
                     belief_updates=[belief],
+                    knowledge_refs=["qa_sent_warning", "backend_changed_api_schema"],
                     action_type="belief_update",
                     dialogue="QA warning evidence와 API schema 변경의 연관성을 새롭게 반영했습니다.",
                 ),

@@ -100,6 +100,7 @@ class DeterministicDecisionProvider:
                 stress_delta=0,
                 trust_delta=0,
                 cooperation_delta=1,
+                knowledge_refs=list(npc.known_fact_ids[:2]),
                 action_type="dialogue",
                 dialogue=dialogue_by_npc.get(npc.id, "현재 상황에서 제가 알고 있는 범위부터 설명드리겠습니다."),
             )
@@ -119,6 +120,7 @@ class DeterministicDecisionProvider:
                 stress_delta=0,
                 trust_delta=0,
                 cooperation_delta=0,
+                knowledge_refs=list(npc.known_fact_ids),
                 action_type="dialogue",
                 dialogue=dialogue,
             )
@@ -136,6 +138,7 @@ class DeterministicDecisionProvider:
                         importance=0.85,
                         turn=context.turn,
                     ),
+                    knowledge_refs=["qa_found_critical_issue", "qa_sent_warning", "warning_recommended_deploy_block"],
                     action_type="show_evidence",
                     action_target="qa_warning_message",
                     dialogue="저를 탓하기 전에 경고 메시지를 확인해 주세요. 배포 전에 이미 위험을 보고했습니다.",
@@ -146,6 +149,7 @@ class DeterministicDecisionProvider:
                 stress_delta=8,
                 trust_delta=-10,
                 cooperation_delta=-5,
+                knowledge_refs=list(npc.known_fact_ids[:2]),
                 action_type="dialogue",
                 dialogue="제 책임만으로 단정하기에는 일정과 공유 과정에도 문제가 있었습니다.",
             )
@@ -162,6 +166,7 @@ class DeterministicDecisionProvider:
                     importance=0.75,
                     turn=context.turn,
                 ),
+                knowledge_refs=list(npc.known_fact_ids[:2]),
                 action_type="dialogue",
                 dialogue="제 설명을 고려해 주셔서 감사합니다. 알고 있는 사실을 더 적극적으로 공유하겠습니다.",
             )

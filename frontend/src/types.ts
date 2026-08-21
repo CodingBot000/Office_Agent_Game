@@ -42,6 +42,7 @@ export interface NPCState {
   role: string;
   personality: Personality;
   dynamic_state: DynamicState;
+  known_fact_ids: string[];
   known_facts: string[];
   beliefs: Belief[];
   relationships: Relationship[];
@@ -82,6 +83,7 @@ export interface AgentDecision {
   cooperation_delta: number;
   belief_updates: Belief[];
   relationship_updates: RelationshipUpdate[];
+  knowledge_refs: string[];
   memory_candidate: Memory | null;
   action_type: string;
   action_target: string | null;
@@ -95,9 +97,11 @@ export interface AgentTrace {
   npc_id: string;
   provider: "cli" | "openai" | "deterministic-mock";
   context_summary: string;
+  known_fact_ids: string[];
   known_facts: string[];
   retrieved_rules: string[];
   decision: AgentDecision;
+  requested_decision: AgentDecision | null;
   guardrails: GuardrailCheck[];
   fallback_used: boolean;
 }

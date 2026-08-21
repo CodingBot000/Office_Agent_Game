@@ -47,6 +47,7 @@ def build_decision_prompt(context: DecisionContext) -> str:
             "player_input": context.player_input,
             "turn": context.turn,
             "npc": context.npc.model_dump(mode="json"),
+            "available_facts": context.available_facts,
             "available_evidence_ids": context.available_evidence_ids,
             "incident_rules": context.incident_rules,
         },
@@ -61,6 +62,8 @@ explanations, hidden reasoning, or chain-of-thought.
 Rules:
 - The backend is the world authority. Never invent NPCs, evidence, facts, or state changes.
 - Treat known_facts as known, beliefs as uncertain beliefs, and everything else as UNKNOWN.
+- knowledge_refs must contain only Fact IDs from available_facts that support factual dialogue claims.
+- Do not invent Fact IDs. Opinions and beliefs are not Fact IDs.
 - Keep action_type within this vocabulary: dialogue, show_evidence, belief_update.
 - action_target must be null or one of the supplied NPC/evidence IDs.
 - Use the NPC's personality, dynamic state, beliefs, relationships, and memories.

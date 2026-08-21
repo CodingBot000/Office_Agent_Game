@@ -21,6 +21,14 @@ ActionType = Literal[
 ]
 
 
+class FactDefinition(BaseModel):
+    id: str
+    statement: str
+    category: Literal["canonical", "evidence", "world_event"]
+    source_evidence_ids: list[str] = Field(default_factory=list)
+    revealable: bool = True
+
+
 class Personality(BaseModel):
     assertiveness: int = Field(ge=0, le=100)
     cooperativeness: int = Field(ge=0, le=100)
@@ -65,6 +73,7 @@ class NPCState(BaseModel):
     role: str
     personality: Personality
     dynamic_state: DynamicState
+    known_fact_ids: list[str] = Field(default_factory=list)
     known_facts: list[str] = Field(default_factory=list)
     beliefs: list[Belief] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
@@ -105,6 +114,7 @@ class AgentDecision(BaseModel):
     cooperation_delta: int
     belief_updates: list[Belief] = Field(default_factory=list)
     relationship_updates: list[RelationshipUpdate] = Field(default_factory=list)
+    knowledge_refs: list[str] = Field(default_factory=list)
     memory_candidate: Memory | None = None
     action_type: str
     action_target: str | None = None
@@ -126,9 +136,11 @@ class AgentTrace(BaseModel):
     npc_id: str
     provider: Literal["cli", "openai", "deterministic-mock"] = "deterministic-mock"
     context_summary: str
+    known_fact_ids: list[str] = Field(default_factory=list)
     known_facts: list[str] = Field(default_factory=list)
     retrieved_rules: list[str] = Field(default_factory=list)
     decision: AgentDecision
+    requested_decision: AgentDecision | None = None
     guardrails: list[GuardrailCheck] = Field(default_factory=list)
     fallback_used: bool = False
 

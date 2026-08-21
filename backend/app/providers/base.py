@@ -15,6 +15,7 @@ class DecisionContext:
     turn: int
     npc: NPCState
     target_npc_id: str
+    available_facts: tuple[str, ...]
     available_evidence_ids: tuple[str, ...]
     incident_rules: tuple[str, ...]
 
