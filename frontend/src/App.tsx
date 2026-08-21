@@ -39,7 +39,6 @@ function App() {
         .slice()
         .reverse()
         .find((trace) => trace.npc_id === selectedNpc?.id) ??
-      snapshot?.agent_traces[snapshot.agent_traces.length - 1] ??
       null,
     [selectedNpc?.id, snapshot],
   );

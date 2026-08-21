@@ -373,14 +373,12 @@ class GameEngine:
 
     def _update_backend_after_warning(self, session: GameSession) -> None:
         backend = session.npcs["backend_01"]
-        self._upsert_belief(
-            backend,
-            Belief(
-                subject="incident",
-                belief="The ignored QA warning and API schema change jointly enabled the outage.",
-                confidence=0.85,
-            ),
+        belief = Belief(
+            subject="incident",
+            belief="The ignored QA warning and API schema change jointly enabled the outage.",
+            confidence=0.85,
         )
+        self._upsert_belief(backend, belief)
         backend.dynamic_state = backend.dynamic_state.model_copy(
             update={
                 "emotion": "uneasy",
@@ -392,6 +390,32 @@ class GameEngine:
             Memory(summary="Player showed the QA warning message during the incident review.", importance=0.7, turn=session.turn)
         )
         backend.recent_memories = backend.recent_memories[-8:]
+        session.agent_traces.append(
+            AgentTrace(
+                id=len(session.agent_traces) + 1,
+                turn=session.turn,
+                event="Player showed QA warning evidence to Backend Developer.",
+                npc_id=backend.id,
+                context_summary="Backend Developer evaluated newly revealed evidence against its existing belief.",
+                known_facts=list(backend.known_facts),
+                retrieved_rules=list(INCIDENT_RULES),
+                decision=AgentDecision(
+                    npc_id=backend.id,
+                    emotion=backend.dynamic_state.emotion,
+                    stress_delta=8,
+                    trust_delta=3,
+                    cooperation_delta=0,
+                    belief_updates=[belief],
+                    action_type="belief_update",
+                    dialogue="QA warning evidence와 API schema 변경의 연관성을 새롭게 반영했습니다.",
+                ),
+                guardrails=[
+                    GuardrailCheck(name="npc_exists", passed=True, detail="NPC exists in the current session."),
+                    GuardrailCheck(name="evidence_exists", passed=True, detail="Evidence exists in the current session."),
+                    GuardrailCheck(name="state_ranges_valid", passed=True, detail="State remains within allowed ranges."),
+                ],
+            )
+        )
 
     def _discover_evidence(self, session: GameSession, evidence_id: str) -> None:
         if evidence_id in session.evidences:

@@ -37,6 +37,7 @@ def test_evidence_propagates_to_backend_belief() -> None:
     response = engine.submit_action(snapshot.session_id, "백엔드에게 QA 증거를 제시한다.")
     backend = next(npc for npc in response.snapshot.npcs if npc.id == "backend_01")
     assert any("ignored QA warning" in belief.belief for belief in backend.beliefs)
+    assert response.snapshot.agent_traces[-1].npc_id == "backend_01"
 
 
 def test_invalid_agent_action_is_rejected_with_fallback() -> None:
