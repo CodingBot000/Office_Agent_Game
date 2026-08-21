@@ -165,7 +165,7 @@ class GameEngine:
             return "order", target_id
         if any(keyword in normalized for keyword in ("책임", "원인", "잘못", "비난", "accuse", "뒤집어")):
             return "accuse", target_id
-        if any(keyword in normalized for keyword in ("묻", "질문", "알고", "무엇", "왜", "ask", "question")):
+        if any(keyword in normalized for keyword in ("묻", "질문", "알고", "무엇", "왜", "뭐야", "뭐가", "무슨", "알려", "설명", "말해", "궁금", "ask", "question")):
             return "ask", target_id
         if any(keyword in normalized for keyword in ("이동", "move", "자리", "회의실로")):
             return "move", target_id
@@ -197,8 +197,22 @@ class GameEngine:
             session.incident_status = "MITIGATING"
             return "롤백 지시가 기록되었습니다."
         if action == "move":
-            session.current_location = "meeting_room" if "회의" in text else "dev_area"
-            self._append_event(session, "Player", f"{session.current_location}으로 이동했습니다.", "movement")
+            normalized = text.lower()
+            if "회의" in normalized:
+                session.current_location = "meeting_room"
+            elif any(keyword in normalized for keyword in ("qa", "품질", "테스트")):
+                session.current_location = "qa_desk"
+            elif any(keyword in normalized for keyword in ("pm", "기획", "planner", "플래너")):
+                session.current_location = "pm_desk"
+            else:
+                session.current_location = "dev_area"
+            location_labels = {
+                "meeting_room": "회의실",
+                "dev_area": "개발 구역",
+                "qa_desk": "QA Desk",
+                "pm_desk": "PM Desk",
+            }
+            self._append_event(session, "Player", f"{location_labels[session.current_location]}로 이동했습니다.", "movement")
             return "현재 위치가 변경되었습니다."
         if action == "summon_meeting":
             session.current_location = "meeting_room"

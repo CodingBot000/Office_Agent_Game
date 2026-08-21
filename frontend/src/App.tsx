@@ -43,13 +43,12 @@ function App() {
     [selectedNpc?.id, snapshot],
   );
 
-  async function runCommand(event: FormEvent) {
-    event.preventDefault();
-    if (!snapshot || !command.trim() || submitting || snapshot.completed) return;
+  async function executeCommand(text: string) {
+    if (!snapshot || !text.trim() || submitting || snapshot.completed) return;
     setSubmitting(true);
     setError(null);
     try {
-      const response = await submitAction(snapshot.session_id, command.trim());
+      const response = await submitAction(snapshot.session_id, text.trim());
       setSnapshot(response.snapshot);
       setCommand("");
     } catch (reason: unknown) {
@@ -57,6 +56,11 @@ function App() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function runCommand(event: FormEvent) {
+    event.preventDefault();
+    await executeCommand(command);
   }
 
   async function handleReset() {
@@ -135,22 +139,42 @@ function App() {
               <span className="muted-label">LIVE</span>
             </div>
             <div className="location-list">
-              <button className="location-item active" type="button">
+              <button
+                className={`location-item ${snapshot.current_location === "meeting_room" ? "active" : ""}`}
+                type="button"
+                onClick={() => void executeCommand("회의실로 이동한다.")}
+                disabled={submitting || snapshot.completed}
+              >
                 <span className="location-icon">⌂</span>
                 <span>Meeting Room</span>
                 <b>01</b>
               </button>
-              <button className="location-item" type="button" onClick={() => setCommand("개발 구역으로 이동한다.")}>
+              <button
+                className={`location-item ${snapshot.current_location === "dev_area" ? "active" : ""}`}
+                type="button"
+                onClick={() => void executeCommand("개발 구역으로 이동한다.")}
+                disabled={submitting || snapshot.completed}
+              >
                 <span className="location-icon">▦</span>
                 <span>Dev Area</span>
                 <b>02</b>
               </button>
-              <button className="location-item" type="button" onClick={() => setCommand("QA Desk로 이동한다.")}>
+              <button
+                className={`location-item ${snapshot.current_location === "qa_desk" ? "active" : ""}`}
+                type="button"
+                onClick={() => void executeCommand("QA Desk로 이동한다.")}
+                disabled={submitting || snapshot.completed}
+              >
                 <span className="location-icon">⊙</span>
                 <span>QA Desk</span>
                 <b>01</b>
               </button>
-              <button className="location-item" type="button" onClick={() => setCommand("PM Desk로 이동한다.")}>
+              <button
+                className={`location-item ${snapshot.current_location === "pm_desk" ? "active" : ""}`}
+                type="button"
+                onClick={() => void executeCommand("PM Desk로 이동한다.")}
+                disabled={submitting || snapshot.completed}
+              >
                 <span className="location-icon">▤</span>
                 <span>PM Desk</span>
                 <b>01</b>

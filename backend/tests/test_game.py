@@ -29,6 +29,27 @@ def test_false_accusation_changes_qa_state_and_reveals_warning() -> None:
     assert response.snapshot.agent_traces[-1].fallback_used is False
 
 
+def test_korean_colloquial_question_reaches_ask_action() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "QA에게 배포전문제가 뭐야?")
+
+    assert response.classified_action == "ask"
+    assert "Critical Issue" in response.message
+
+
+def test_qa_desk_location_button_command_moves_to_qa_desk() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "QA Desk로 이동한다.")
+
+    assert response.classified_action == "move"
+    assert response.snapshot.current_location == "qa_desk"
+    assert response.snapshot.events[-1].message == "QA Desk로 이동했습니다."
+
+
 def test_evidence_propagates_to_backend_belief() -> None:
     engine = GameEngine()
     snapshot = engine.create_session()
