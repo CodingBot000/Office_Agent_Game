@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
+import { ModeChooser, VisualOffice } from "./VisualOffice";
 import type {
   AvailableGameAction,
   AgentTrace,
@@ -11,16 +12,44 @@ import type {
   SocialEventTrace,
 } from "./types";
 
-const quickCommands = [
-  { id: "qa-ask", targetLabel: "QA", targetNpcId: "qa_01", dialogue: "배포전에 무슨 문제가 있던거죠?" },
-  { id: "qa-accuse", targetLabel: "QA", targetNpcId: "qa_01", dialogue: "이번 장애의 원인을 어떻게 보고 있나요?" },
-  { id: "qa-evidence", targetLabel: "QA", targetNpcId: "qa_01", dialogue: "배포 전 경고 메시지를 보여줄 수 있나요?" },
-  { id: "backend-evidence", targetLabel: "Backend", targetNpcId: "backend_01", dialogue: "QA 경고 증거를 확인해 주세요." },
-  { id: "rollback", targetLabel: "Team", targetNpcId: null, dialogue: "배포를 중단하고 롤백해 주세요." },
-];
+type QuickCommand = {
+  id: string;
+  dialogue: string;
+  requiresEvidenceId?: string;
+};
+
+type ViewMode = "chooser" | "dialogue" | "visual";
+
+const recommendedQuickCommands: Record<string, QuickCommand[]> = {
+  qa_01: [
+    { id: "qa-ask", dialogue: "배포 전에 어떤 문제를 발견했나요?" },
+    { id: "qa-evidence", dialogue: "배포 전 경고 메시지를 보여줄 수 있나요?" },
+    { id: "qa-follow-up", dialogue: "경고 메시지를 보낸 뒤 어떤 응답을 받았나요?" },
+  ],
+  backend_01: [
+    { id: "backend-ask", dialogue: "API 응답 스키마를 어떻게 변경했고, 왜 배포를 진행했나요?" },
+    { id: "backend-verification", dialogue: "배포 전에 QA 경고와 Frontend 반영 상태를 어떻게 확인했나요?" },
+    {
+      id: "backend-evidence",
+      dialogue: "QA가 배포 20분 전에 보낸 경고 증거를 확인해 주세요.",
+      requiresEvidenceId: "qa_warning_message",
+    },
+  ],
+  frontend_01: [
+    { id: "frontend-ask", dialogue: "API 변경 사항을 언제 전달받았고, 배포 전 검증은 어떻게 진행했나요?" },
+    { id: "frontend-failure", dialogue: "로컬 검증이 통과했는데 배포 후 요청이 실패한 이유를 어떻게 보고 있나요?" },
+    { id: "frontend-contract", dialogue: "변경된 응답 필드와 실제 프론트엔드 코드의 차이를 확인해 주세요." },
+  ],
+  pm_01: [
+    { id: "pm-ask", dialogue: "릴리스 일정이 하루 앞당겨진 경위와 배포를 서두른 이유를 설명해 주세요." },
+    { id: "pm-approval", dialogue: "일정 변경 당시 QA 검증과 배포 승인 절차는 어떻게 합의됐나요?" },
+    { id: "pm-warning-follow-up", dialogue: "QA 경고 이후에도 배포를 진행하게 된 승인 절차가 있었나요?" },
+  ],
+};
 
 function App() {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("chooser");
   const [lastIntent, setLastIntent] = useState<ActionResponseMeta | null>(null);
   const [pendingCommand, setPendingCommand] = useState<PendingCommand | null>(null);
   const [targetHint, setTargetHint] = useState<string | null>(null);
@@ -33,6 +62,7 @@ function App() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionAlert, setActionAlert] = useState<string | null>(null);
+  const visualLocationRequest = useRef<string | null>(null);
 
   useEffect(() => {
     startSession()
@@ -45,6 +75,7 @@ function App() {
     () => snapshot?.npcs.find((npc) => npc.id === selectedNpcId) ?? snapshot?.npcs[0] ?? null,
     [selectedNpcId, snapshot],
   );
+  const selectedQuickCommands = selectedNpc ? recommendedQuickCommands[selectedNpc.id] ?? [] : [];
   const latestTrace = useMemo<AgentTrace | null>(
     () =>
       snapshot?.agent_traces
@@ -168,6 +199,38 @@ function App() {
     }
   }
 
+  function openDialogue(targetId?: string) {
+    if (targetId) {
+      setSelectedNpcId(targetId);
+      setTargetHint(targetId);
+    }
+    setCommand("");
+    setViewMode("dialogue");
+  }
+
+  async function syncVisualLocation(location: string) {
+    if (!(["meeting_room", "dev_area", "qa_desk", "pm_desk"] as string[]).includes(location)) {
+      return;
+    }
+    const targetLocation = location as NonNullable<IntentClassification["location"]>;
+    if (
+      !snapshot
+      || snapshot.completed
+      || snapshot.current_location === targetLocation
+      || submitting
+      || visualLocationRequest.current === targetLocation
+    ) {
+      return;
+    }
+
+    visualLocationRequest.current = targetLocation;
+    try {
+      await executeCommand(`이동: ${targetLocation}`, moveHint(targetLocation), null);
+    } finally {
+      visualLocationRequest.current = null;
+    }
+  }
+
   if (loading) return <div className="boot-screen">Loading incident workspace…</div>;
   if (!snapshot) {
     return (
@@ -175,6 +238,34 @@ function App() {
         <p>Backend 연결이 필요합니다.</p>
         <code>{error ?? "Unknown error"}</code>
       </div>
+    );
+  }
+
+  if (viewMode === "chooser") {
+    return (
+      <ModeChooser
+        snapshot={snapshot}
+        onChoose={(mode) => setViewMode(mode)}
+      />
+    );
+  }
+
+  if (viewMode === "visual") {
+    return (
+      <VisualOffice
+        key={snapshot.session_id}
+        snapshot={snapshot}
+        selectedNpcId={selectedNpcId}
+        submitting={submitting}
+        error={error}
+        actionAlert={actionAlert}
+        onChooseMode={(mode) => setViewMode(mode)}
+        onReset={() => void handleReset()}
+        onLocationChange={(location) => void syncVisualLocation(location)}
+        onSelectNpc={setSelectedNpcId}
+        onTalk={openDialogue}
+        onAction={(action) => void executeGameAction(action)}
+      />
     );
   }
 
@@ -196,6 +287,10 @@ function App() {
           <span className={`incident-state ${snapshot.incident_status.toLowerCase()}`}>
             <i /> {snapshot.incident_status}
           </span>
+          <div className="view-switch" aria-label="화면 모드 선택">
+            <button className="active" type="button" onClick={() => setViewMode("dialogue")}>DIALOGUE</button>
+            <button type="button" onClick={() => setViewMode("visual")}>OFFICE VIEW</button>
+          </div>
           <button className="ghost-button" type="button" onClick={handleReset} disabled={submitting}>
             RESET SESSION
           </button>
@@ -275,6 +370,7 @@ function App() {
                   onClick={() => {
                     setSelectedNpcId(npc.id);
                     setTargetHint(npc.id);
+                    setCommand("");
                   }}
                 >
                   <span className="avatar">{npc.name.charAt(0)}</span>
@@ -361,21 +457,28 @@ function App() {
               </button>
             </form>
             <div className="quick-command-row">
-              <span>QUICK ACTIONS</span>
-              {quickCommands.slice(0, 3).map((quickCommand) => (
-                <div className="quick-action-row" key={quickCommand.id}>
-                  <span className="quick-target">대상 {quickCommand.targetLabel}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCommand(quickCommand.dialogue);
-                      setTargetHint(quickCommand.targetNpcId);
-                    }}
-                  >
-                    {quickCommand.dialogue}
-                  </button>
-                </div>
-              ))}
+              <span>QUICK ACTIONS · {selectedNpc?.name ?? "SELECT MEMBER"}</span>
+              {selectedQuickCommands.map((quickCommand) => {
+                const requiresEvidence = quickCommand.requiresEvidenceId;
+                const evidenceReady = !requiresEvidence
+                  || snapshot.evidences.some((evidence) => evidence.id === requiresEvidence && evidence.discovered);
+                return (
+                  <div className="quick-action-row" key={quickCommand.id}>
+                    <span className="quick-target">대상 {selectedNpc?.name ?? "-"}</span>
+                    <button
+                      type="button"
+                      disabled={!evidenceReady || submitting || snapshot.completed}
+                      title={!evidenceReady ? "먼저 QA에게 경고 메시지를 요청하세요." : undefined}
+                      onClick={() => {
+                        setCommand(quickCommand.dialogue);
+                        setTargetHint(selectedNpc?.id ?? null);
+                      }}
+                    >
+                      {quickCommand.dialogue}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
             {error && !pendingCommand?.error && <p className="inline-error">{error}</p>}
             {actionAlert && <p className="action-alert" role="alert">{actionAlert}</p>}

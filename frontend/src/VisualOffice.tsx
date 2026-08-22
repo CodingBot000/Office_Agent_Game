@@ -1,0 +1,515 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import type { AvailableGameAction, GameSnapshot, NPCState } from "./types";
+
+export type VisualMode = "dialogue" | "visual";
+
+type WorldPoint = {
+  x: number;
+  y: number;
+};
+
+type SpriteDirection = "front" | "back" | "left" | "right";
+
+type VisualOfficeProps = {
+  snapshot: GameSnapshot;
+  selectedNpcId: string;
+  submitting: boolean;
+  error: string | null;
+  actionAlert: string | null;
+  onChooseMode: (mode: VisualMode) => void;
+  onReset: () => void;
+  onLocationChange: (location: string) => void;
+  onSelectNpc: (id: string) => void;
+  onTalk: (id: string) => void;
+  onAction: (action: AvailableGameAction) => void;
+};
+
+const OFFICE_ASSET_BASE = "/office-assets";
+const WORLD_BOUNDS = { minX: -10.25, maxX: 10.25, minY: -6.25, maxY: 6.25 };
+const PLAYER_RADIUS = 0.45;
+const PLAYER_SPEED = 4;
+const INTERACTION_DISTANCE = 2.25;
+
+const npcWorldLayout: Record<string, { point: WorldPoint; location: string; asset: string }> = {
+  backend_01: { point: { x: -6, y: 1.06 }, location: "dev_area", asset: `${OFFICE_ASSET_BASE}/characters/backend.png` },
+  frontend_01: { point: { x: -6, y: -1.54 }, location: "dev_area", asset: `${OFFICE_ASSET_BASE}/characters/frontend.png` },
+  qa_01: { point: { x: 5, y: 1.81 }, location: "qa_desk", asset: `${OFFICE_ASSET_BASE}/characters/qa.png` },
+  pm_01: { point: { x: 5, y: -4.69 }, location: "pm_desk", asset: `${OFFICE_ASSET_BASE}/characters/pm.png` },
+};
+
+const locationSpawnPoints: Record<string, WorldPoint> = {
+  meeting_room: { x: 0, y: -0.5 },
+  dev_area: { x: -2.5, y: -0.5 },
+  qa_desk: { x: 2.5, y: 1.1 },
+  pm_desk: { x: 2.5, y: -1.2 },
+};
+
+const deskFixtures = [
+  { id: "backend-desk", point: { x: -6, y: 2.5 }, objectId: "backend_keyboard" },
+  { id: "frontend-desk", point: { x: -6, y: -0.1 }, objectId: "frontend_keyboard" },
+  { id: "shared-desk", point: { x: -6, y: -2.7 }, objectId: null },
+  { id: "qa-desk", point: { x: 5, y: 3.25 }, objectId: "qa_keyboard" },
+  { id: "pm-desk", point: { x: 5, y: -3.25 }, objectId: "pm_keyboard" },
+];
+
+const collisionRects = [
+  { x: 0, y: 6.1, width: 20.5, height: 0.35 },
+  { x: 0, y: -6.1, width: 20.5, height: 0.35 },
+  { x: -10.1, y: 0, width: 0.35, height: 12 },
+  { x: 10.1, y: 0, width: 0.35, height: 12 },
+  { x: -6, y: 2.5, width: 4.5, height: 1.5 },
+  { x: -6, y: -0.1, width: 4.5, height: 1.5 },
+  { x: -6, y: -2.7, width: 4.5, height: 1.5 },
+  { x: 5, y: 3.25, width: 4.5, height: 1.5 },
+  { x: 5, y: -3.25, width: 4.5, height: 1.5 },
+  { x: -9.25, y: 0, width: 0.7, height: 2 },
+  { x: -1.7, y: 4.75, width: 0.85, height: 1.35 },
+  { x: 8.7, y: 0.2, width: 0.7, height: 0.75 },
+];
+
+const directionBackgroundPositions: Record<SpriteDirection, string> = {
+  front: "0% 0%",
+  back: "33.333% 0%",
+  left: "66.667% 0%",
+  right: "100% 0%",
+};
+
+const locationLabels: Record<string, string> = {
+  meeting_room: "MEETING ROOM",
+  dev_area: "DEV AREA",
+  qa_desk: "QA DESK",
+  pm_desk: "PM DESK",
+};
+
+export function ModeChooser({ snapshot, onChoose }: { snapshot: GameSnapshot; onChoose: (mode: VisualMode) => void }) {
+  return (
+    <main className="mode-chooser-shell">
+      <header className="chooser-header">
+        <div className="brand-lockup">
+          <div className="brand-mark">WM</div>
+          <div>
+            <h1>WHO MESSED UP?</h1>
+            <p>AI OFFICE INCIDENT SIMULATOR</p>
+          </div>
+        </div>
+        <span className="chooser-session">SESSION READY · {snapshot.ai_provider}</span>
+      </header>
+
+      <section className="mode-chooser-content">
+        <div className="chooser-copy">
+          <span className="chooser-kicker">INCIDENT 01 / SELECT INTERFACE</span>
+          <h2>어떻게 사건을<br /><em>조사할까요?</em></h2>
+          <p>같은 사건 상태를 두 가지 방식으로 플레이할 수 있습니다. 대화와 증거에 집중하거나, Unity에서 만든 사무실 공간을 직접 돌아다녀 보세요.</p>
+          <div className="chooser-line" />
+          <span className="chooser-hint">게임 화면에서는 WASD / 방향키로 이동하고, 가까이 가서 E를 누르면 상호작용합니다.</span>
+        </div>
+
+        <div className="mode-choice-grid">
+          <button className="mode-choice dialogue-choice" type="button" onClick={() => onChoose("dialogue")}>
+            <span className="mode-choice-index">01</span>
+            <span className="mode-choice-title">DIALOGUE MODE</span>
+            <span className="mode-choice-description">텍스트 로그, NPC 상태, Agent trace를 한 화면에서 확인합니다.</span>
+            <span className="mode-choice-action">START CONVERSATION <b>↗</b></span>
+          </button>
+
+          <button className="mode-choice visual-choice" type="button" onClick={() => onChoose("visual")}>
+            <div className="chooser-art-map" aria-hidden="true">
+              <div className="chooser-art-zone chooser-art-dev" />
+              <div className="chooser-art-zone chooser-art-qa" />
+              <div className="chooser-art-zone chooser-art-pm" />
+              <div className="chooser-art-desk chooser-art-desk-a" />
+              <div className="chooser-art-desk chooser-art-desk-b" />
+              <CharacterSprite asset={`${OFFICE_ASSET_BASE}/characters/player.png`} direction="front" className="chooser-player" />
+              <CharacterSprite asset={`${OFFICE_ASSET_BASE}/characters/qa.png`} direction="back" className="chooser-qa" />
+            </div>
+            <span className="mode-choice-index">02</span>
+            <span className="mode-choice-title">VISUAL OFFICE</span>
+            <span className="mode-choice-description">Unity 오피스를 직접 이동하며 NPC와 오브젝트를 조사합니다.</span>
+            <span className="mode-choice-action">ENTER THE OFFICE <b>↗</b></span>
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export function VisualOffice({
+  snapshot,
+  selectedNpcId,
+  submitting,
+  error,
+  actionAlert,
+  onChooseMode,
+  onReset,
+  onLocationChange,
+  onSelectNpc,
+  onTalk,
+  onAction,
+}: VisualOfficeProps) {
+  const initialPosition = locationSpawnPoints[snapshot.current_location] ?? locationSpawnPoints.meeting_room;
+  const [playerPosition, setPlayerPosition] = useState<WorldPoint>(initialPosition);
+  const [playerDirection, setPlayerDirection] = useState<SpriteDirection>("front");
+  const [interactionOpen, setInteractionOpen] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+  const keysRef = useRef<Set<string>>(new Set());
+  const lastLocationRef = useRef(getLocationForPoint(initialPosition));
+
+  const selectedNpc = useMemo(
+    () => snapshot.npcs.find((npc) => npc.id === selectedNpcId) ?? snapshot.npcs[0] ?? null,
+    [selectedNpcId, snapshot.npcs],
+  );
+  const nearestNpc = useMemo(() => {
+    const candidates = snapshot.npcs
+      .map((npc) => {
+        const layout = npcWorldLayout[npc.id];
+        if (!layout) return null;
+        const distance = Math.hypot(layout.point.x - playerPosition.x, layout.point.y - playerPosition.y);
+        return { npc, layout, distance };
+      })
+      .filter((candidate): candidate is { npc: NPCState; layout: (typeof npcWorldLayout)[string]; distance: number } => candidate !== null)
+      .sort((a, b) => a.distance - b.distance)[0];
+    return candidates && candidates.distance <= INTERACTION_DISTANCE ? candidates : null;
+  }, [playerPosition, snapshot.npcs]);
+  const currentLocation = getLocationForPoint(playerPosition);
+  const heldObject = snapshot.world_objects.find((worldObject) => worldObject.holder_id === "player" && worldObject.condition !== "destroyed");
+  const nearbyActions = nearestNpc
+    ? snapshot.available_game_actions.filter((action) => action.target_id === nearestNpc.npc.id)
+    : [];
+  const latestEvent = snapshot.events.slice(-1)[0] ?? null;
+
+  useEffect(() => {
+    if (currentLocation === lastLocationRef.current) return;
+    lastLocationRef.current = currentLocation;
+    onLocationChange(currentLocation);
+  }, [currentLocation, onLocationChange]);
+
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const movementKey = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key);
+      if (movementKey) {
+        event.preventDefault();
+        keysRef.current.add(key);
+      }
+      if (key === "e" && nearestNpc && !snapshot.completed) {
+        event.preventDefault();
+        onSelectNpc(nearestNpc.npc.id);
+        setInteractionOpen(true);
+      }
+      if (key === "i" && !snapshot.completed) {
+        event.preventDefault();
+        setInventoryOpen((open) => !open);
+      }
+    };
+    const up = (event: KeyboardEvent) => keysRef.current.delete(event.key.toLowerCase());
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      keysRef.current.clear();
+    };
+  }, [nearestNpc, onSelectNpc, snapshot.completed]);
+
+  useEffect(() => {
+    if (snapshot.completed) return;
+    let animationFrame = 0;
+    let lastTime = performance.now();
+
+    const tick = (time: number) => {
+      const delta = Math.min((time - lastTime) / 1000, 0.05);
+      lastTime = time;
+      const keys = keysRef.current;
+      let x = 0;
+      let y = 0;
+      if (keys.has("a") || keys.has("arrowleft")) x -= 1;
+      if (keys.has("d") || keys.has("arrowright")) x += 1;
+      if (keys.has("s") || keys.has("arrowdown")) y -= 1;
+      if (keys.has("w") || keys.has("arrowup")) y += 1;
+      if (x !== 0 || y !== 0) {
+        const length = Math.hypot(x, y);
+        const next = { x: x / length, y: y / length };
+        setPlayerDirection(
+          Math.abs(next.x) > Math.abs(next.y)
+            ? (next.x < 0 ? "left" : "right")
+            : (next.y > 0 ? "back" : "front"),
+        );
+        setPlayerPosition((position) => movePlayer(position, { x: next.x * PLAYER_SPEED * delta, y: next.y * PLAYER_SPEED * delta }));
+      }
+      animationFrame = requestAnimationFrame(tick);
+    };
+
+    animationFrame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [snapshot.completed]);
+
+  useEffect(() => {
+    if (!nearestNpc) setInteractionOpen(false);
+  }, [nearestNpc]);
+
+  const selectNpc = (id: string) => {
+    onSelectNpc(id);
+    const layout = npcWorldLayout[id];
+    if (layout) {
+      const distance = Math.hypot(layout.point.x - playerPosition.x, layout.point.y - playerPosition.y);
+      setInteractionOpen(distance <= INTERACTION_DISTANCE);
+    }
+  };
+
+  return (
+    <main className="visual-office-shell">
+      <header className="visual-topbar">
+        <div className="brand-lockup">
+          <div className="brand-mark">WM</div>
+          <div>
+            <h1>WHO MESSED UP?</h1>
+            <p>VISUAL OFFICE INCIDENT SIMULATOR</p>
+          </div>
+        </div>
+        <div className="visual-topbar-meta">
+          <span className="visual-provider-dot" />
+          <span>{snapshot.ai_provider} / {snapshot.ai_model}</span>
+          <span>TURN {String(snapshot.turn).padStart(2, "0")} / 20</span>
+          <span className={`visual-incident-state ${snapshot.incident_status.toLowerCase()}`}>{snapshot.incident_status}</span>
+          <div className="view-switch visual-view-switch" aria-label="화면 모드 선택">
+            <button type="button" onClick={() => onChooseMode("dialogue")}>DIALOGUE</button>
+            <button className="active" type="button" onClick={() => onChooseMode("visual")}>OFFICE VIEW</button>
+          </div>
+          <button className="visual-reset-button" type="button" onClick={onReset} disabled={submitting}>RESET</button>
+        </div>
+      </header>
+
+      <section className="visual-workspace">
+        <div className="visual-main-column">
+          <div className="visual-stage-heading">
+            <div>
+              <span className="visual-overline">LIVE WORLD / UNITY ASSET BRIDGE</span>
+              <h2>{locationLabels[currentLocation] ?? currentLocation.replaceAll("_", " ")}</h2>
+            </div>
+            <div className="visual-stage-stats">
+              <span><i className="status-light" /> BACKEND LINKED</span>
+              <span>{snapshot.events.length} EVENTS</span>
+            </div>
+          </div>
+
+          <div className="visual-stage-frame">
+            <div className="office-map" role="application" aria-label="Unity 스타일 사무실 게임 화면">
+              <div className="map-floor" />
+              <div className="map-zone map-dev-zone"><span>DEV AREA</span></div>
+              <div className="map-zone map-qa-zone"><span>QA DESK</span></div>
+              <div className="map-zone map-pm-zone"><span>PM DESK</span></div>
+
+              <div className="map-wall map-wall-north" />
+              <div className="map-wall map-wall-south" />
+              <div className="map-wall map-wall-west" />
+              <div className="map-wall map-wall-east" />
+              <MapAsset src={`${OFFICE_ASSET_BASE}/partition.png`} alt="" className="map-partition partition-dev-top" style={centeredWorldStyle(-8.2, 4.65, 2.4, 0.62)} />
+              <MapAsset src={`${OFFICE_ASSET_BASE}/partition.png`} alt="" className="map-partition partition-dev-bottom" style={centeredWorldStyle(-8.2, -4.65, 2.4, 0.62)} />
+              <MapAsset src={`${OFFICE_ASSET_BASE}/partition.png`} alt="" className="map-partition partition-qa" style={centeredWorldStyle(5, 5.15, 4.5, 0.62)} />
+              <MapAsset src={`${OFFICE_ASSET_BASE}/partition.png`} alt="" className="map-partition partition-pm" style={centeredWorldStyle(5, -5.15, 4.5, 0.62)} />
+
+              {deskFixtures.map((desk) => {
+                const keyboard = desk.objectId ? snapshot.world_objects.find((item) => item.id === desk.objectId) : null;
+                const keyboardHidden = keyboard?.holder_id === "player" || keyboard?.condition === "destroyed";
+                return (
+                  <div className="desk-fixture" key={desk.id}>
+                    <MapAsset src={`${OFFICE_ASSET_BASE}/desk.png`} alt="" className="map-desk" style={centeredWorldStyle(desk.point.x, desk.point.y, 5, 1.7)} />
+                    <MapAsset src={`${OFFICE_ASSET_BASE}/monitor.png`} alt="" className="map-monitor" style={centeredWorldStyle(desk.point.x, desk.point.y + 0.56, 1.7, 1.1)} />
+                    {!keyboardHidden && <MapAsset src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="" className={`map-keyboard ${keyboard?.condition ?? "normal"}`} style={centeredWorldStyle(desk.point.x, desk.point.y - 0.4, 1.3, 0.48)} />}
+                  </div>
+                );
+              })}
+
+              <MapAsset src={`${OFFICE_ASSET_BASE}/server_rack.png`} alt="server rack" className="map-decoration" style={centeredWorldStyle(-9.25, 0, 0.7, 2)} />
+              <MapAsset src={`${OFFICE_ASSET_BASE}/whiteboard.png`} alt="whiteboard" className="map-decoration" style={centeredWorldStyle(-1.7, 4.75, 0.85, 1.35)} />
+              <MapAsset src={`${OFFICE_ASSET_BASE}/coffee_machine.png`} alt="coffee machine" className="map-decoration" style={centeredWorldStyle(8.7, 0.2, 0.7, 0.75)} />
+
+              {snapshot.npcs.map((npc) => {
+                const layout = npcWorldLayout[npc.id];
+                if (!layout) return null;
+                const isSelected = npc.id === selectedNpcId;
+                const isNearby = npc.id === nearestNpc?.npc.id;
+                return (
+                  <button
+                    className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""}`}
+                    key={npc.id}
+                    type="button"
+                    style={worldPointStyle(layout.point, 2.1)}
+                    onClick={() => selectNpc(npc.id)}
+                    aria-label={`${npc.name} 선택`}
+                  >
+                    <CharacterSprite asset={layout.asset} direction="back" />
+                    <span className="world-character-label">{npc.name}</span>
+                    <span className={`world-emotion-dot ${npc.dynamic_state.emotion}`} />
+                  </button>
+                );
+              })}
+
+              {nearestNpc && (
+                <div className="nearby-marker" style={worldPointStyle(nearestNpc.layout.point, 0.7)} aria-hidden="true">E</div>
+              )}
+
+              {interactionOpen && nearestNpc && (
+                <div className="world-interaction-card" style={centeredWorldStyle(nearestNpc.layout.point.x, nearestNpc.layout.point.y + 1.6, 3.2, 1.22)}>
+                  <strong>{nearestNpc.npc.name}</strong>
+                  <span>무엇을 할까요?</span>
+                  <div>
+                    <button type="button" onClick={() => onTalk(nearestNpc.npc.id)}>대화하기</button>
+                    <button type="button" onClick={() => setInteractionOpen(false)}>액션 보기</button>
+                  </div>
+                </div>
+              )}
+
+              <div className="world-player" style={worldPointStyle(playerPosition, 2.35)}>
+                <CharacterSprite asset={`${OFFICE_ASSET_BASE}/characters/player.png`} direction={playerDirection} />
+                {heldObject && <img className="held-world-object" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="손에 든 키보드" />}
+                <span className="world-character-label">PLAYER</span>
+              </div>
+
+              <div className="map-location-chip">{locationLabels[currentLocation] ?? currentLocation}</div>
+            </div>
+          </div>
+
+          <div className="visual-controls-bar">
+            <div className="key-hints">
+              <span><b>WASD</b> / <b>←↑↓→</b> MOVE</span>
+              <span><b>E</b> INTERACT</span>
+              <span><b>I</b> INVENTORY</span>
+            </div>
+            <div className="d-pad" aria-label="이동 방향 버튼">
+              <button type="button" onPointerDown={() => keysRef.current.add("arrowup")} onPointerUp={() => keysRef.current.delete("arrowup")} onPointerLeave={() => keysRef.current.delete("arrowup")} aria-label="위로 이동">↑</button>
+              <button type="button" onPointerDown={() => keysRef.current.add("arrowleft")} onPointerUp={() => keysRef.current.delete("arrowleft")} onPointerLeave={() => keysRef.current.delete("arrowleft")} aria-label="왼쪽으로 이동">←</button>
+              <button type="button" onPointerDown={() => keysRef.current.add("arrowdown")} onPointerUp={() => keysRef.current.delete("arrowdown")} onPointerLeave={() => keysRef.current.delete("arrowdown")} aria-label="아래로 이동">↓</button>
+              <button type="button" onPointerDown={() => keysRef.current.add("arrowright")} onPointerUp={() => keysRef.current.delete("arrowright")} onPointerLeave={() => keysRef.current.delete("arrowright")} aria-label="오른쪽으로 이동">→</button>
+            </div>
+          </div>
+        </div>
+
+        <aside className="visual-sidebar">
+          <section className="visual-panel objective-panel">
+            <div className="visual-panel-heading"><span>OBJECTIVE</span><span className="panel-count">{snapshot.turn}/20</span></div>
+            <ul className="visual-objective-list">
+              {snapshot.objective.map((item, index) => <li key={item}><span>0{index + 1}</span>{item}</li>)}
+            </ul>
+          </section>
+
+          <section className="visual-panel team-panel">
+            <div className="visual-panel-heading"><span>TEAM MEMBERS</span><span className="panel-count">{snapshot.npcs.length} ACTIVE</span></div>
+            <div className="visual-team-list">
+              {snapshot.npcs.map((npc) => (
+                <button className={npc.id === selectedNpcId ? "selected" : ""} type="button" key={npc.id} onClick={() => selectNpc(npc.id)}>
+                  <span className="team-avatar"><CharacterSprite asset={npcWorldLayout[npc.id]?.asset ?? ""} direction="back" /></span>
+                  <span><strong>{npc.name}</strong><small>{npc.role}</small></span>
+                  <i className={`team-presence ${npc.dynamic_state.emotion}`} />
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {selectedNpc && (
+            <section className="visual-panel selected-panel">
+              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{selectedNpc.dynamic_state.emotion}</span></div>
+              <div className="visual-selected-person"><CharacterSprite asset={npcWorldLayout[selectedNpc.id]?.asset ?? ""} direction="back" /><div><strong>{selectedNpc.name}</strong><small>{selectedNpc.role}</small></div></div>
+              <div className="visual-metrics">
+                <MetricBar label="STRESS" value={selectedNpc.dynamic_state.stress} tone="amber" />
+                <MetricBar label="TRUST" value={Math.max(0, selectedNpc.dynamic_state.trust_toward_player)} tone="cyan" />
+                <MetricBar label="COOPERATION" value={selectedNpc.dynamic_state.cooperation} tone="green" />
+              </div>
+              {nearestNpc?.npc.id === selectedNpc.id ? (
+                <button className="visual-interact-button" type="button" onClick={() => setInteractionOpen(true)} disabled={submitting || snapshot.completed}>E · INTERACT</button>
+              ) : (
+                <p className="visual-distance-note">NPC에게 가까이 가면 상호작용할 수 있습니다.</p>
+              )}
+            </section>
+          )}
+
+          <section className="visual-panel inventory-panel">
+            <button className="visual-panel-heading inventory-heading" type="button" onClick={() => setInventoryOpen((open) => !open)}><span>INVENTORY · I</span><span>{inventoryOpen ? "−" : "+"}</span></button>
+            {inventoryOpen && (
+              <div className="visual-inventory-content">
+                <span className="inventory-label">PLAYER HAND</span>
+                {heldObject ? <p className="inventory-held">{heldObject.name}<small>{heldObject.condition}</small></p> : <p className="inventory-empty">Hands are empty.</p>}
+                <span className="inventory-label">EVIDENCE</span>
+                <p className="inventory-evidence-count">{snapshot.evidences.filter((evidence) => evidence.discovered).length} / {snapshot.evidences.length} discovered</p>
+              </div>
+            )}
+          </section>
+
+          {latestEvent && <div className="visual-event-toast"><span>LATEST EVENT · TURN {String(latestEvent.turn).padStart(2, "0")}</span><p>{latestEvent.message}</p></div>}
+          {(error || actionAlert) && <div className="visual-alert" role="alert">{error ?? actionAlert}</div>}
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+function CharacterSprite({ asset, direction, className = "" }: { asset: string; direction: SpriteDirection; className?: string }) {
+  return <span className={`character-sprite ${className}`} style={{ backgroundImage: `url(${asset})`, backgroundPosition: directionBackgroundPositions[direction] }} aria-hidden="true" />;
+}
+
+function MapAsset({ src, alt, className, style }: { src: string; alt: string; className: string; style: React.CSSProperties }) {
+  return <img className={className} src={src} alt={alt} style={style} draggable={false} />;
+}
+
+function MetricBar({ label, value, tone }: { label: string; value: number; tone: "amber" | "cyan" | "green" }) {
+  return (
+    <div className="visual-metric-row">
+      <div><span>{label}</span><strong>{value}</strong></div>
+      <div className="metric-track"><span className={tone} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div>
+    </div>
+  );
+}
+
+function centeredWorldStyle(x: number, y: number, width: number, height: number): React.CSSProperties {
+  return {
+    left: `${((x - width / 2 - WORLD_BOUNDS.minX) / (WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX)) * 100}%`,
+    bottom: `${((y - height / 2 - WORLD_BOUNDS.minY) / (WORLD_BOUNDS.maxY - WORLD_BOUNDS.minY)) * 100}%`,
+    width: `${(width / (WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX)) * 100}%`,
+    height: `${(height / (WORLD_BOUNDS.maxY - WORLD_BOUNDS.minY)) * 100}%`,
+  };
+}
+
+function worldPointStyle(point: WorldPoint, width: number): React.CSSProperties {
+  return {
+    left: `${((point.x - WORLD_BOUNDS.minX) / (WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX)) * 100}%`,
+    bottom: `${((point.y - WORLD_BOUNDS.minY) / (WORLD_BOUNDS.maxY - WORLD_BOUNDS.minY)) * 100}%`,
+    width: `${(width / (WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX)) * 100}%`,
+    height: `${(width / (WORLD_BOUNDS.maxX - WORLD_BOUNDS.minX)) * 100}%`,
+  };
+}
+
+function getLocationForPoint(point: WorldPoint): string {
+  if (point.x >= 2.25 && point.x <= 7.75 && point.y >= 0.95 && point.y <= 5.05) return "qa_desk";
+  if (point.x >= 2.25 && point.x <= 7.75 && point.y >= -5.05 && point.y <= -0.95) return "pm_desk";
+  if (point.x >= -9.1 && point.x <= -1.9 && point.y >= -5.15 && point.y <= 5.15) return "dev_area";
+  if (point.x >= -2 && point.x <= 2 && point.y >= -6 && point.y <= 6) return "meeting_room";
+  return point.x < -1.9 ? "dev_area" : point.y >= 0 ? "qa_desk" : "pm_desk";
+}
+
+function movePlayer(position: WorldPoint, delta: WorldPoint): WorldPoint {
+  const candidateX = { x: position.x + delta.x, y: position.y };
+  const candidateY = { x: position.x, y: position.y + delta.y };
+  return {
+    x: collides(candidateX) ? position.x : candidateX.x,
+    y: collides(candidateY) ? position.y : candidateY.y,
+  };
+}
+
+function collides(point: WorldPoint): boolean {
+  if (
+    point.x < WORLD_BOUNDS.minX + PLAYER_RADIUS
+    || point.x > WORLD_BOUNDS.maxX - PLAYER_RADIUS
+    || point.y < WORLD_BOUNDS.minY + PLAYER_RADIUS
+    || point.y > WORLD_BOUNDS.maxY - PLAYER_RADIUS
+  ) {
+    return true;
+  }
+
+  return collisionRects.some((rect) => (
+    point.x >= rect.x - rect.width / 2 - PLAYER_RADIUS
+    && point.x <= rect.x + rect.width / 2 + PLAYER_RADIUS
+    && point.y >= rect.y - rect.height / 2 - PLAYER_RADIUS
+    && point.y <= rect.y + rect.height / 2 + PLAYER_RADIUS
+  ));
+}
