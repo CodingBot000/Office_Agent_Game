@@ -24,7 +24,7 @@ def test_sqlite_repository_restores_session_across_engine_instances(tmp_path) ->
 
 
 @pytest.mark.parametrize("legacy_version", [1, 2])
-def test_legacy_known_fact_strings_migrate_to_v5_fact_ids(tmp_path, caplog, legacy_version: int) -> None:
+def test_legacy_known_fact_strings_migrate_to_v6_fact_ids(tmp_path, caplog, legacy_version: int) -> None:
     database_path = tmp_path / f"migration-{legacy_version}.db"
     settings = Settings(
         ai_provider="deterministic-mock",
@@ -59,11 +59,12 @@ def test_legacy_known_fact_strings_migrate_to_v5_fact_ids(tmp_path, caplog, lega
         "qa_sent_warning",
         "qa_has_no_deploy_permission",
     ]
-    assert migrated_payload["schema_version"] == 5
+    assert migrated_payload["schema_version"] == 6
+    assert restored.npcs["qa_01"].is_fallen is False
     assert "session_migration_unmapped_fact" in caplog.text
 
 
-def test_v3_relationships_migrate_to_v5_directional_graph(tmp_path) -> None:
+def test_v3_relationships_migrate_to_v6_directional_graph(tmp_path) -> None:
     database_path = tmp_path / "relationship-migration.db"
     settings = Settings(
         ai_provider="deterministic-mock",
@@ -85,7 +86,7 @@ def test_v3_relationships_migrate_to_v5_directional_graph(tmp_path) -> None:
     migrated_payload = repository.load(started.session_id)
 
     assert migrated_payload is not None
-    assert migrated_payload["schema_version"] == 5
+    assert migrated_payload["schema_version"] == 6
     assert restored.relationships["qa_01->player"].trust == 15
     assert restored.relationships["qa_01->backend_01"].tension == 60
     assert restored.relationships["player->qa_01"].trust == 0
@@ -93,7 +94,7 @@ def test_v3_relationships_migrate_to_v5_directional_graph(tmp_path) -> None:
     assert restored.social_events == []
 
 
-def test_v4_session_migrates_game_action_inventory_fields_to_v5(tmp_path) -> None:
+def test_v4_session_migrates_game_action_inventory_fields_to_v6(tmp_path) -> None:
     database_path = tmp_path / "game-action-migration.db"
     settings = Settings(
         ai_provider="deterministic-mock",
@@ -114,7 +115,7 @@ def test_v4_session_migrates_game_action_inventory_fields_to_v5(tmp_path) -> Non
     migrated_payload = repository.load(started.session_id)
 
     assert migrated_payload is not None
-    assert migrated_payload["schema_version"] == 5
+    assert migrated_payload["schema_version"] == 6
     assert restored.game_action_traces == []
     assert restored.world_objects["backend_keyboard"].holder_id is None
     assert restored.world_objects["backend_keyboard"].condition == "normal"

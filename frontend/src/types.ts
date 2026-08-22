@@ -60,6 +60,7 @@ export interface WorldObjectState {
   destructible: boolean;
   holder_id: string | null;
   condition: "normal" | "damaged" | "destroyed";
+  is_dropped: boolean;
 }
 
 export type GameActionFamily = "pick_up_object" | "break_held_object" | "drop_held_object" | "inspect_object" | "throw_held_object";
@@ -70,6 +71,8 @@ export interface AvailableGameAction {
   label: string;
   object_id: string | null;
   target_id: string | null;
+  owner_id: string | null;
+  scope: "target" | "held_item" | "world";
   location: string;
   enabled: boolean;
   disabled_reason: string | null;
@@ -95,6 +98,7 @@ export interface GameActionTrace {
   location: string;
   object_id: string | null;
   owner_id: string | null;
+  target_id: string | null;
   holder_before: string | null;
   holder_after: string | null;
   condition_before: string | null;
@@ -110,6 +114,7 @@ export interface NPCState {
   role: string;
   personality: Personality;
   dynamic_state: DynamicState;
+  is_fallen: boolean;
   known_fact_ids: string[];
   known_facts: string[];
   beliefs: Belief[];

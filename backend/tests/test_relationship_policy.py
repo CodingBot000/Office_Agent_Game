@@ -61,6 +61,38 @@ def test_role_priority_prevents_duplicate_relationship_effects() -> None:
     assert abs(witness.trust_delta) < abs(direct.trust_delta)
 
 
+def test_property_interference_uses_guarded_emotion_for_witness() -> None:
+    outcome = RelationshipPolicyEngine().evaluate(
+        make_impact("property_interference", 3),
+        actor_id="player",
+        direct_target_ids=["backend_01"],
+        object_owner_id="backend_01",
+        witness_ids=["frontend_01"],
+        turn=1,
+    )
+
+    emotions = {effect.npc_id: effect for effect in outcome.emotion_effects}
+    assert emotions["backend_01"].emotion == "angry"
+    assert emotions["frontend_01"].emotion == "guarded"
+    assert emotions["frontend_01"].stress_delta < emotions["backend_01"].stress_delta
+    assert abs(emotions["frontend_01"].cooperation_delta) < abs(emotions["backend_01"].cooperation_delta)
+
+
+def test_property_aggression_uses_shocked_emotion_for_witness() -> None:
+    outcome = RelationshipPolicyEngine().evaluate(
+        make_impact("property_aggression", 4),
+        actor_id="player",
+        direct_target_ids=["backend_01"],
+        object_owner_id="backend_01",
+        witness_ids=["frontend_01"],
+        turn=1,
+    )
+
+    emotions = {effect.npc_id: effect.emotion for effect in outcome.emotion_effects}
+    assert emotions["backend_01"] == "angry"
+    assert emotions["frontend_01"] == "shocked"
+
+
 def test_apology_recovery_is_bounded_and_does_not_create_severe_events() -> None:
     outcome = RelationshipPolicyEngine().evaluate(
         make_impact("apology", 2, observable=False),

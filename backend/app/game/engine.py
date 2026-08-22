@@ -82,7 +82,7 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 5
+CURRENT_SESSION_SCHEMA_VERSION = 6
 GAME_ACTION_ALERT = "Use the provided action buttons to perform game actions."
 
 
@@ -283,7 +283,8 @@ class GameEngine:
                 family=action.family if action else None,
                 location=session.current_location,
                 object_id=action.object_id if action else None,
-                owner_id=action.target_id if action else None,
+                owner_id=action.owner_id if action else None,
+                target_id=action.target_id if action else None,
                 message=reason,
                 guardrails=[
                     GameActionGuardrail(
@@ -346,10 +347,32 @@ class GameEngine:
             self._append_event(session, "Player", message, "game_action")
             self._append_event(session, "POLICY ENGINE", f"{world_object.name}이(가) 파손되어 사용할 수 없습니다.", "policy")
         elif action.family == "drop_held_object":
-            world_object = world_object.model_copy(update={"holder_id": None, "location": session.current_location})
+            world_object = world_object.model_copy(
+                update={"holder_id": None, "location": session.current_location, "is_dropped": True}
+            )
             session.world_objects[world_object.id] = world_object
             message = f"{world_object.name}을(를) 내려놓았습니다."
             self._append_event(session, "Player", message, "game_action")
+        elif action.family == "throw_held_object":
+            target_id = action.target_id
+            target = session.npcs.get(target_id or "")
+            if target is None or target.is_fallen:
+                return self._record_blocked_game_action(session, action, "Target NPC cannot be hit in the current state.")
+
+            self._apply_throw_policy(session, world_object, target_id)
+            world_object = world_object.model_copy(
+                update={
+                    "holder_id": None,
+                    "condition": "destroyed",
+                    "location": session.current_location,
+                    "is_dropped": True,
+                }
+            )
+            session.world_objects[world_object.id] = world_object
+            target.is_fallen = True
+            session.dialogue_refused_npc_ids.add(target.id)
+            message = f"{world_object.name}을(를) {target.name}에게 던졌습니다. 물건이 파손됐고 {target.name}가 쓰러졌습니다."
+            self._append_event(session, "Player", message, "game_action", target.id)
         else:
             return self._record_blocked_game_action(session, action, "This game action is not enabled yet.")
 
@@ -362,6 +385,7 @@ class GameEngine:
                 location=session.current_location,
                 object_id=world_object.id,
                 owner_id=owner_id,
+                target_id=action.target_id,
                 holder_before=holder_before,
                 holder_after=world_object.holder_id,
                 condition_before=condition_before,
@@ -382,6 +406,7 @@ class GameEngine:
         family: str,
         severity: int,
         reason_codes: list[str],
+        excluded_witness_ids: set[str] | None = None,
     ) -> None:
         if world_object.owner_id is None or world_object.owner_id not in session.npcs:
             return
@@ -396,7 +421,12 @@ class GameEngine:
             reason_codes=reason_codes,  # type: ignore[arg-type]
             confidence=1.0,
         )
-        witnesses = self._derive_witnesses(session, classification, [world_object.owner_id], [], world_object.owner_id)
+        excluded_witness_ids = excluded_witness_ids or set()
+        witnesses = [
+            npc_id
+            for npc_id in self._derive_witnesses(session, classification, [world_object.owner_id], [], world_object.owner_id)
+            if npc_id not in excluded_witness_ids
+        ]
         outcome = self.relationship_policy.evaluate(
             classification,
             actor_id="player",
@@ -414,6 +444,50 @@ class GameEngine:
             "dialogue",
             owner.id,
         )
+
+    def _apply_throw_policy(self, session: GameSession, world_object: WorldObjectState, target_id: str | None) -> None:
+        if target_id is None or target_id not in session.npcs:
+            return
+
+        classification = SocialImpactClassification(
+            action_family="physical_assault",
+            direct_target_ids=[target_id],
+            object_id=world_object.id,
+            severity=5,
+            intentionality="deliberate",
+            observable=True,
+            evidence_based=False,
+            reason_codes=["physical_danger", "property_damage"],
+            confidence=1.0,
+        )
+        witnesses = self._derive_witnesses(session, classification, [target_id], [], None)
+        outcome = self.relationship_policy.evaluate(
+            classification,
+            actor_id="player",
+            direct_target_ids=[target_id],
+            witness_ids=witnesses,
+            turn=session.turn,
+        )
+        self._apply_social_outcome(session, classification, outcome)
+
+        target = session.npcs[target_id]
+        self._append_event(
+            session,
+            target.name,
+            self._social_reaction_message(classification, target),
+            "dialogue",
+            target.id,
+        )
+
+        if world_object.owner_id and world_object.owner_id in session.npcs and world_object.owner_id != target_id:
+            self._apply_owner_policy(
+                session,
+                world_object,
+                "property_aggression",
+                4,
+                ["property_violation", "property_damage"],
+                excluded_witness_ids={target_id},
+            )
 
     def _record_blocked_game_action(
         self,
@@ -531,6 +605,7 @@ class GameEngine:
         for npc_id, raw_npc in npc_payload.items():
             if not isinstance(raw_npc, dict):
                 continue
+            raw_npc.setdefault("is_fallen", False)
             known_fact_ids = [str(item) for item in raw_npc.get("known_fact_ids", [])]
             if not known_fact_ids:
                 for legacy_fact in raw_npc.get("known_facts", []):

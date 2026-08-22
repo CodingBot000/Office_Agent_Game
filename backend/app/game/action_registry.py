@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.game.seed import NPC_HOME_LOCATIONS
 from app.models import AvailableGameAction, PlayerInventory
 
 if TYPE_CHECKING:
@@ -19,6 +20,16 @@ def build_player_inventory(session: GameSession) -> PlayerInventory:
     )
 
 
+def _npc_ids_at_current_location(session: GameSession) -> list[str]:
+    if session.current_location == "meeting_room":
+        return list(session.npcs)
+    return [
+        npc_id
+        for npc_id in session.npcs
+        if NPC_HOME_LOCATIONS.get(npc_id) == session.current_location
+    ]
+
+
 def build_available_game_actions(session: GameSession) -> list[AvailableGameAction]:
     inventory = build_player_inventory(session)
     actions: list[AvailableGameAction] = []
@@ -31,7 +42,8 @@ def build_available_game_actions(session: GameSession) -> list[AvailableGameActi
                         family="break_held_object",
                         label=f"Break {world_object.name}",
                         object_id=world_object.id,
-                        target_id=world_object.owner_id,
+                        owner_id=world_object.owner_id,
+                        scope="held_item",
                         location=session.current_location,
                     )
                 )
@@ -41,10 +53,28 @@ def build_available_game_actions(session: GameSession) -> list[AvailableGameActi
                     family="drop_held_object",
                     label=f"Drop {world_object.name}",
                     object_id=world_object.id,
-                    target_id=world_object.owner_id,
+                    owner_id=world_object.owner_id,
+                    scope="held_item",
                     location=session.current_location,
                 )
             )
+
+            for npc_id in _npc_ids_at_current_location(session):
+                npc = session.npcs[npc_id]
+                if npc.is_fallen:
+                    continue
+                actions.append(
+                    AvailableGameAction(
+                        id=f"throw_{world_object.id}_at_{npc_id}",
+                        family="throw_held_object",
+                        label=f"Throw {world_object.name} at {npc.name}",
+                        object_id=world_object.id,
+                        target_id=npc_id,
+                        owner_id=world_object.owner_id,
+                        scope="target",
+                        location=session.current_location,
+                    )
+                )
             continue
 
         if world_object.location != session.current_location:
@@ -58,6 +88,8 @@ def build_available_game_actions(session: GameSession) -> list[AvailableGameActi
                     label=f"Inspect {world_object.name}",
                     object_id=world_object.id,
                     target_id=world_object.owner_id,
+                    owner_id=world_object.owner_id,
+                    scope="world",
                     location=session.current_location,
                 )
             )
@@ -71,6 +103,8 @@ def build_available_game_actions(session: GameSession) -> list[AvailableGameActi
                     label=f"Pick up {world_object.name}",
                     object_id=world_object.id,
                     target_id=world_object.owner_id,
+                    owner_id=world_object.owner_id,
+                    scope="world",
                     location=session.current_location,
                     enabled=can_pick_up,
                     disabled_reason=None if can_pick_up else "Player is already holding an object.",

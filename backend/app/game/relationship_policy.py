@@ -69,7 +69,12 @@ class RelationshipPolicyEngine:
                     reason_codes=[role, *classification.reason_codes],
                 )
             )
-            emotion, stress_delta, cooperation_delta = self._emotion_effect(family, classification.severity, factor)
+            emotion, stress_delta, cooperation_delta = self._emotion_effect(
+                family,
+                classification.severity,
+                factor,
+                role,
+            )
             emotions.append(
                 EmotionEffect(
                     npc_id=npc_id,
@@ -133,15 +138,25 @@ class RelationshipPolicyEngine:
         limit = 60 if severity >= 4 else 25
         return max(-limit, min(limit, round(value * multiplier * severity_factor)))
 
-    def _emotion_effect(self, family: str, severity: int, factor: float) -> tuple[str, int, int]:
-        if family in {"property_aggression", "physical_intimidation", "physical_assault", "threat"}:
-            return "afraid" if severity >= 4 else "shocked", round(severity * 8 * factor), round(-severity * 7 * factor)
+    def _emotion_effect(self, family: str, severity: int, factor: float, role: str) -> tuple[str, int, int]:
+        if family == "property_interference":
+            emotion = "guarded" if role == "witness" else "angry" if severity >= 3 else "guarded"
+            return emotion, round(severity * 6 * factor), round(-severity * 5 * factor)
+        if family == "property_aggression":
+            emotion = "shocked" if role == "witness" else "angry"
+            return emotion, round(severity * 8 * factor), round(-severity * 7 * factor)
+        if family in {"physical_intimidation", "physical_assault", "threat"}:
+            emotion = "shocked" if role == "witness" else "afraid" if severity >= 4 else "shocked"
+            return emotion, round(severity * 8 * factor), round(-severity * 7 * factor)
         if family in HARMFUL_ACTION_FAMILIES:
-            return "angry" if severity >= 3 else "guarded", round(severity * 6 * factor), round(-severity * 5 * factor)
+            emotion = "guarded" if role == "witness" else "angry" if severity >= 3 else "guarded"
+            return emotion, round(severity * 6 * factor), round(-severity * 5 * factor)
         if family in {"apology", "repair_action", "mediation"}:
-            return "cautiously_relieved", round(-severity * 2 * factor), round(severity * 2 * factor)
+            emotion = "attentive" if role == "witness" else "cautiously_relieved"
+            return emotion, round(-severity * 2 * factor), round(severity * 2 * factor)
         if family == "support":
-            return "supported", round(-severity * 3 * factor), round(severity * 3 * factor)
+            emotion = "attentive" if role == "witness" else "supported"
+            return emotion, round(-severity * 3 * factor), round(severity * 3 * factor)
         return "attentive", round(-factor), round(factor)
 
     def _mandatory_events(self, classification: SocialImpactClassification) -> list[WorldEvent]:

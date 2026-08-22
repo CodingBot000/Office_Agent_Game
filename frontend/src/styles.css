@@ -479,6 +479,40 @@ h1, h2, p { margin: 0; }
 .view-switch button:last-child { border-right: 0; }
 .view-switch button:hover, .view-switch button.active { background: rgba(86,215,233,.08); color: var(--cyan); }
 
+/* Shared held-item actions and visual-office throw feedback */
+.game-action-group + .game-action-group { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--line); }
+.game-action-group > p { margin: 0 0 7px; color: var(--faint); font: 500 8px var(--mono); letter-spacing: .09em; }
+.game-action-group { display: grid; gap: 6px; }
+
+.map-keyboard.is-dropped { display: none; }
+.dropped-world-object { position: absolute; z-index: 10; object-fit: fill; image-rendering: pixelated; filter: drop-shadow(0 2px 1px rgba(0,0,0,.45)); }
+.world-character-button.fallen { cursor: not-allowed; filter: none; }
+.world-character-button.fallen .character-sprite { transform: rotate(90deg) translateY(-13%); transform-origin: 50% 65%; opacity: .9; }
+.world-character-button.fallen .world-emotion-dot { opacity: .55; }
+.world-character-button:disabled { cursor: not-allowed; }
+.visual-team-list button.fallen { opacity: .62; cursor: not-allowed; }
+.visual-team-list button:disabled { cursor: not-allowed; }
+
+.world-interaction-card.actions-open { justify-content: flex-start; padding: 8px 7px; gap: 5px; overflow: hidden; }
+.world-action-menu { width: 100%; display: grid; gap: 5px; overflow-y: auto; }
+.world-action-group { display: grid; gap: 4px; }
+.world-action-group > span { color: var(--amber); font: 500 7px var(--mono); letter-spacing: .06em; }
+.world-action-group button { width: 100%; padding: 5px 6px; text-align: left; font-size: 7px; line-height: 1.25; }
+.world-action-group button:disabled { opacity: .45; cursor: not-allowed; }
+.world-action-empty { color: var(--faint); font: 8px var(--mono); }
+.world-action-back { width: 100%; margin-top: 2px; color: var(--faint) !important; }
+
+.thrown-world-object { position: absolute; z-index: 50; height: auto; object-fit: contain; image-rendering: pixelated; pointer-events: none; transform: translateX(-50%); animation: thrown-keyboard .68s linear forwards; filter: drop-shadow(0 2px 1px rgba(0,0,0,.55)); }
+@keyframes thrown-keyboard {
+  to { left: var(--throw-target-left); bottom: var(--throw-target-bottom); transform: translateX(-50%) rotate(-1080deg) scale(.82); }
+}
+.world-break-effect { position: absolute; z-index: 51; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.break-half { position: absolute; width: 92%; height: auto; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 2px 1px rgba(0,0,0,.55)); }
+.break-left { clip-path: inset(0 50% 0 0); transform: translateX(-22%) rotate(-23deg); animation: break-left .48s ease-out forwards; }
+.break-right { clip-path: inset(0 0 0 50%); transform: translateX(22%) rotate(23deg); animation: break-right .48s ease-out forwards; }
+@keyframes break-left { to { transform: translate(-58%, 24%) rotate(-68deg); opacity: 0; } }
+@keyframes break-right { to { transform: translate(58%, 24%) rotate(68deg); opacity: 0; } }
+
 @media (max-width: 1120px) {
   .visual-workspace { width: min(100% - 28px, 980px); grid-template-columns: minmax(0, 1fr) 255px; gap: 15px; }
   .visual-topbar { padding-inline: 18px; }

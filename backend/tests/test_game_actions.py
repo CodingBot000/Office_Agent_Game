@@ -42,11 +42,14 @@ def test_pickup_and_break_updates_holder_owner_relationship_and_memory() -> None
 
     picked = engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_backend_keyboard"))
     backend_after_pickup = next(npc for npc in picked.snapshot.npcs if npc.id == "backend_01")
+    frontend_after_pickup = next(npc for npc in picked.snapshot.npcs if npc.id == "frontend_01")
     keyboard_after_pickup = next(item for item in picked.snapshot.world_objects if item.id == "backend_keyboard")
     assert picked.blocked is False
     assert keyboard_after_pickup.holder_id == "player"
     assert "backend_keyboard" in picked.snapshot.player_inventory.held_object_ids
-    assert backend_after_pickup.dynamic_state.emotion in {"angry", "guarded"}
+    assert backend_after_pickup.dynamic_state.emotion == "angry"
+    assert frontend_after_pickup.dynamic_state.emotion == "guarded"
+    assert frontend_after_pickup.dynamic_state.stress < backend_after_pickup.dynamic_state.stress
     assert "break_backend_keyboard" in action_ids(picked.snapshot)
     assert "pick_up_frontend_keyboard" not in action_ids(picked.snapshot)
 
@@ -65,6 +68,72 @@ def test_pickup_and_break_updates_holder_owner_relationship_and_memory() -> None
     assert backend_after_break.important_memories
     assert broken.snapshot.incident_status == "HR_ESCALATED"
     assert broken.snapshot.game_action_traces[-1].condition_after == "destroyed"
+
+
+def test_held_item_actions_remain_available_and_throw_targets_current_npc() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+    move(engine, started.session_id, "dev_area")
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_backend_keyboard"))
+
+    move(engine, started.session_id, "pm_desk")
+    pm_snapshot = engine.snapshot(engine.get_session(started.session_id))
+    actions = {action.id: action for action in pm_snapshot.available_game_actions}
+
+    assert actions["break_backend_keyboard"].scope == "held_item"
+    assert actions["break_backend_keyboard"].target_id is None
+    assert actions["break_backend_keyboard"].owner_id == "backend_01"
+    assert actions["drop_backend_keyboard"].scope == "held_item"
+    assert actions["drop_backend_keyboard"].target_id is None
+
+    throw = actions["throw_backend_keyboard_at_pm_01"]
+    assert throw.family == "throw_held_object"
+    assert throw.scope == "target"
+    assert throw.target_id == "pm_01"
+    assert throw.owner_id == "backend_01"
+
+
+def test_drop_marks_held_item_as_dropped_at_current_location() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+    move(engine, started.session_id, "dev_area")
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_backend_keyboard"))
+
+    move(engine, started.session_id, "pm_desk")
+    dropped = engine.submit_game_action(started.session_id, GameActionRequest(action_id="drop_backend_keyboard"))
+    keyboard = next(item for item in dropped.snapshot.world_objects if item.id == "backend_keyboard")
+
+    assert keyboard.holder_id is None
+    assert keyboard.location == "pm_desk"
+    assert keyboard.is_dropped is True
+
+
+def test_throw_held_object_breaks_item_and_fells_target_npc() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+    move(engine, started.session_id, "dev_area")
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_backend_keyboard"))
+
+    thrown = engine.submit_game_action(
+        started.session_id,
+        GameActionRequest(action_id="throw_backend_keyboard_at_frontend_01"),
+    )
+
+    keyboard = next(item for item in thrown.snapshot.world_objects if item.id == "backend_keyboard")
+    frontend = next(npc for npc in thrown.snapshot.npcs if npc.id == "frontend_01")
+    backend = next(npc for npc in thrown.snapshot.npcs if npc.id == "backend_01")
+
+    assert thrown.blocked is False
+    assert keyboard.holder_id is None
+    assert keyboard.condition == "destroyed"
+    assert thrown.snapshot.player_inventory.held_object_ids == []
+    assert frontend.is_fallen is True
+    assert frontend.id in thrown.snapshot.dialogue_refused_npc_ids
+    assert frontend.dynamic_state.emotion == "afraid"
+    assert backend.dynamic_state.emotion == "angry"
+    assert thrown.snapshot.incident_status == "SECURITY_ESCALATED"
+    assert thrown.snapshot.game_action_traces[-1].family == "throw_held_object"
+    assert thrown.snapshot.game_action_traces[-1].target_id == "frontend_01"
 
 
 def test_natural_language_game_action_is_blocked_without_progress() -> None:

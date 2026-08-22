@@ -22,7 +22,12 @@ type VisualOfficeProps = {
   onLocationChange: (location: string) => void;
   onSelectNpc: (id: string) => void;
   onTalk: (id: string) => void;
-  onAction: (action: AvailableGameAction) => void;
+  onAction: (action: AvailableGameAction) => Promise<void>;
+};
+
+type ThrowAnimation = {
+  targetId: string;
+  phase: "flying" | "impact";
 };
 
 const OFFICE_ASSET_BASE = "/office-assets";
@@ -43,6 +48,13 @@ const locationSpawnPoints: Record<string, WorldPoint> = {
   dev_area: { x: -2.5, y: -0.5 },
   qa_desk: { x: 2.5, y: 1.1 },
   pm_desk: { x: 2.5, y: -1.2 },
+};
+
+const droppedObjectPoints: Record<string, WorldPoint> = {
+  dev_area: { x: -4.25, y: -2.95 },
+  qa_desk: { x: 3.65, y: 1.35 },
+  pm_desk: { x: 3.65, y: -4.25 },
+  meeting_room: { x: 0, y: -2.1 },
 };
 
 const deskFixtures = [
@@ -151,9 +163,12 @@ export function VisualOffice({
   const [playerPosition, setPlayerPosition] = useState<WorldPoint>(initialPosition);
   const [playerDirection, setPlayerDirection] = useState<SpriteDirection>("front");
   const [interactionOpen, setInteractionOpen] = useState(false);
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
+  const [throwAnimation, setThrowAnimation] = useState<ThrowAnimation | null>(null);
   const keysRef = useRef<Set<string>>(new Set());
   const lastLocationRef = useRef(getLocationForPoint(initialPosition));
+  const throwTimersRef = useRef<number[]>([]);
 
   const selectedNpc = useMemo(
     () => snapshot.npcs.find((npc) => npc.id === selectedNpcId) ?? snapshot.npcs[0] ?? null,
@@ -161,6 +176,7 @@ export function VisualOffice({
   );
   const nearestNpc = useMemo(() => {
     const candidates = snapshot.npcs
+      .filter((npc) => !npc.is_fallen)
       .map((npc) => {
         const layout = npcWorldLayout[npc.id];
         if (!layout) return null;
@@ -173,9 +189,15 @@ export function VisualOffice({
   }, [playerPosition, snapshot.npcs]);
   const currentLocation = getLocationForPoint(playerPosition);
   const heldObject = snapshot.world_objects.find((worldObject) => worldObject.holder_id === "player" && worldObject.condition !== "destroyed");
-  const nearbyActions = nearestNpc
-    ? snapshot.available_game_actions.filter((action) => action.target_id === nearestNpc.npc.id)
-    : [];
+  const nearbyActions = useMemo(() => {
+    if (!nearestNpc) return [];
+    return snapshot.available_game_actions.filter((action) => action.scope === "held_item" || action.target_id === nearestNpc.npc.id);
+  }, [nearestNpc, snapshot.available_game_actions]);
+  const targetActions = nearbyActions.filter((action) => action.scope !== "held_item");
+  const heldItemActions = nearbyActions.filter((action) => action.scope === "held_item");
+  const droppedObjects = snapshot.world_objects.filter(
+    (worldObject) => worldObject.is_dropped && worldObject.holder_id === null && worldObject.condition !== "destroyed",
+  );
   const latestEvent = snapshot.events.slice(-1)[0] ?? null;
 
   useEffect(() => {
@@ -245,8 +267,15 @@ export function VisualOffice({
   }, [snapshot.completed]);
 
   useEffect(() => {
-    if (!nearestNpc) setInteractionOpen(false);
+    if (!nearestNpc) {
+      setInteractionOpen(false);
+      setActionMenuOpen(false);
+    }
   }, [nearestNpc]);
+
+  useEffect(() => () => {
+    throwTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
 
   const selectNpc = (id: string) => {
     onSelectNpc(id);
@@ -255,6 +284,23 @@ export function VisualOffice({
       const distance = Math.hypot(layout.point.x - playerPosition.x, layout.point.y - playerPosition.y);
       setInteractionOpen(distance <= INTERACTION_DISTANCE);
     }
+  };
+
+  const executeVisualAction = async (action: AvailableGameAction) => {
+    setActionMenuOpen(false);
+    if (action.family === "throw_held_object" && action.object_id && action.target_id) {
+      startThrowAnimation(action.target_id);
+    }
+    await onAction(action);
+  };
+
+  const startThrowAnimation = (targetId: string) => {
+    throwTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    setThrowAnimation({ targetId, phase: "flying" });
+    throwTimersRef.current = [
+      window.setTimeout(() => setThrowAnimation((current) => current ? { ...current, phase: "impact" } : null), 680),
+      window.setTimeout(() => setThrowAnimation(null), 1160),
+    ];
   };
 
   return (
@@ -311,7 +357,7 @@ export function VisualOffice({
 
               {deskFixtures.map((desk) => {
                 const keyboard = desk.objectId ? snapshot.world_objects.find((item) => item.id === desk.objectId) : null;
-                const keyboardHidden = keyboard?.holder_id === "player" || keyboard?.condition === "destroyed";
+                const keyboardHidden = keyboard?.holder_id === "player" || keyboard?.condition === "destroyed" || keyboard?.is_dropped;
                 return (
                   <div className="desk-fixture" key={desk.id}>
                     <MapAsset src={`${OFFICE_ASSET_BASE}/desk.png`} alt="" className="map-desk" style={centeredWorldStyle(desk.point.x, desk.point.y, 5, 1.7)} />
@@ -319,6 +365,11 @@ export function VisualOffice({
                     {!keyboardHidden && <MapAsset src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="" className={`map-keyboard ${keyboard?.condition ?? "normal"}`} style={centeredWorldStyle(desk.point.x, desk.point.y - 0.4, 1.3, 0.48)} />}
                   </div>
                 );
+              })}
+
+              {droppedObjects.map((worldObject) => {
+                const point = droppedObjectPoints[worldObject.location] ?? droppedObjectPoints.meeting_room;
+                return <MapAsset key={`dropped-${worldObject.id}`} src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt={`${worldObject.name} 바닥에 놓임`} className="dropped-world-object" style={centeredWorldStyle(point.x, point.y, 1.25, 0.46)} />;
               })}
 
               <MapAsset src={`${OFFICE_ASSET_BASE}/server_rack.png`} alt="server rack" className="map-decoration" style={centeredWorldStyle(-9.25, 0, 0.7, 2)} />
@@ -332,15 +383,16 @@ export function VisualOffice({
                 const isNearby = npc.id === nearestNpc?.npc.id;
                 return (
                   <button
-                    className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""}`}
+                    className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""} ${npc.is_fallen ? "fallen" : ""}`}
                     key={npc.id}
                     type="button"
                     style={worldPointStyle(layout.point, 2.1)}
                     onClick={() => selectNpc(npc.id)}
                     aria-label={`${npc.name} 선택`}
+                    disabled={npc.is_fallen}
                   >
-                    <CharacterSprite asset={layout.asset} direction="back" />
-                    <span className="world-character-label">{npc.name}</span>
+                    <CharacterSprite asset={layout.asset} direction={npc.is_fallen ? "front" : "back"} />
+                    <span className="world-character-label">{npc.name}{npc.is_fallen ? " · DOWN" : ""}</span>
                     <span className={`world-emotion-dot ${npc.dynamic_state.emotion}`} />
                   </button>
                 );
@@ -351,13 +403,24 @@ export function VisualOffice({
               )}
 
               {interactionOpen && nearestNpc && (
-                <div className="world-interaction-card" style={centeredWorldStyle(nearestNpc.layout.point.x, nearestNpc.layout.point.y + 1.6, 3.2, 1.22)}>
+                <div className={`world-interaction-card ${actionMenuOpen ? "actions-open" : ""}`} style={centeredWorldStyle(nearestNpc.layout.point.x, nearestNpc.layout.point.y + 1.6, 3.65, actionMenuOpen ? 4.35 : 1.22)}>
                   <strong>{nearestNpc.npc.name}</strong>
-                  <span>무엇을 할까요?</span>
-                  <div>
-                    <button type="button" onClick={() => onTalk(nearestNpc.npc.id)}>대화하기</button>
-                    <button type="button" onClick={() => setInteractionOpen(false)}>액션 보기</button>
-                  </div>
+                  {!actionMenuOpen ? (
+                    <>
+                      <span>무엇을 할까요?</span>
+                      <div>
+                        <button type="button" onClick={() => onTalk(nearestNpc.npc.id)}>대화하기</button>
+                        <button type="button" onClick={() => setActionMenuOpen(true)}>액션 보기</button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="world-action-menu">
+                      {targetActions.length > 0 && <WorldActionGroup title={`${nearestNpc.npc.name} 관련`} actions={targetActions} submitting={submitting} onAction={(action) => void executeVisualAction(action)} />}
+                      {heldItemActions.length > 0 && <WorldActionGroup title="손에 든 물건" actions={heldItemActions} submitting={submitting} onAction={(action) => void executeVisualAction(action)} />}
+                      {nearbyActions.length === 0 && <span className="world-action-empty">현재 가능한 액션이 없습니다.</span>}
+                      <button className="world-action-back" type="button" onClick={() => setActionMenuOpen(false)}>뒤로</button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -366,6 +429,29 @@ export function VisualOffice({
                 {heldObject && <img className="held-world-object" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="손에 든 키보드" />}
                 <span className="world-character-label">PLAYER</span>
               </div>
+
+              {throwAnimation && (() => {
+                const target = npcWorldLayout[throwAnimation.targetId]?.point;
+                if (!target) return null;
+                const targetStyle = worldPointStyle(target, 1.2) as React.CSSProperties & Record<string, string>;
+                return throwAnimation.phase === "flying" ? (
+                  <img
+                    className="thrown-world-object"
+                    src={`${OFFICE_ASSET_BASE}/keyboard.png`}
+                    alt="날아가는 키보드"
+                    style={{
+                      ...worldPointStyle(playerPosition, 1.25),
+                      "--throw-target-left": targetStyle.left,
+                      "--throw-target-bottom": targetStyle.bottom,
+                    } as React.CSSProperties}
+                  />
+                ) : (
+                  <div className="world-break-effect" style={worldPointStyle(target, 1.5)} aria-label="키보드 파손 효과">
+                    <img className="break-half break-left" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="" />
+                    <img className="break-half break-right" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="" />
+                  </div>
+                );
+              })()}
 
               <div className="map-location-chip">{locationLabels[currentLocation] ?? currentLocation}</div>
             </div>
@@ -398,9 +484,9 @@ export function VisualOffice({
             <div className="visual-panel-heading"><span>TEAM MEMBERS</span><span className="panel-count">{snapshot.npcs.length} ACTIVE</span></div>
             <div className="visual-team-list">
               {snapshot.npcs.map((npc) => (
-                <button className={npc.id === selectedNpcId ? "selected" : ""} type="button" key={npc.id} onClick={() => selectNpc(npc.id)}>
+                <button className={`${npc.id === selectedNpcId ? "selected" : ""} ${npc.is_fallen ? "fallen" : ""}`} type="button" key={npc.id} onClick={() => selectNpc(npc.id)} disabled={npc.is_fallen}>
                   <span className="team-avatar"><CharacterSprite asset={npcWorldLayout[npc.id]?.asset ?? ""} direction="back" /></span>
-                  <span><strong>{npc.name}</strong><small>{npc.role}</small></span>
+                  <span><strong>{npc.name}</strong><small>{npc.is_fallen ? "쓰러짐" : npc.role}</small></span>
                   <i className={`team-presence ${npc.dynamic_state.emotion}`} />
                 </button>
               ))}
@@ -409,17 +495,17 @@ export function VisualOffice({
 
           {selectedNpc && (
             <section className="visual-panel selected-panel">
-              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{selectedNpc.dynamic_state.emotion}</span></div>
+              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{selectedNpc.is_fallen ? "DOWN" : selectedNpc.dynamic_state.emotion}</span></div>
               <div className="visual-selected-person"><CharacterSprite asset={npcWorldLayout[selectedNpc.id]?.asset ?? ""} direction="back" /><div><strong>{selectedNpc.name}</strong><small>{selectedNpc.role}</small></div></div>
               <div className="visual-metrics">
                 <MetricBar label="STRESS" value={selectedNpc.dynamic_state.stress} tone="amber" />
                 <MetricBar label="TRUST" value={Math.max(0, selectedNpc.dynamic_state.trust_toward_player)} tone="cyan" />
                 <MetricBar label="COOPERATION" value={selectedNpc.dynamic_state.cooperation} tone="green" />
               </div>
-              {nearestNpc?.npc.id === selectedNpc.id ? (
+              {!selectedNpc.is_fallen && nearestNpc?.npc.id === selectedNpc.id ? (
                 <button className="visual-interact-button" type="button" onClick={() => setInteractionOpen(true)} disabled={submitting || snapshot.completed}>E · INTERACT</button>
               ) : (
-                <p className="visual-distance-note">NPC에게 가까이 가면 상호작용할 수 있습니다.</p>
+                <p className="visual-distance-note">{selectedNpc.is_fallen ? "쓰러진 NPC와는 상호작용할 수 없습니다." : "NPC에게 가까이 가면 상호작용할 수 있습니다."}</p>
               )}
             </section>
           )}
@@ -458,6 +544,35 @@ function MetricBar({ label, value, tone }: { label: string; value: number; tone:
       <div><span>{label}</span><strong>{value}</strong></div>
       <div className="metric-track"><span className={tone} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div>
     </div>
+  );
+}
+
+function WorldActionGroup({
+  title,
+  actions,
+  submitting,
+  onAction,
+}: {
+  title: string;
+  actions: AvailableGameAction[];
+  submitting: boolean;
+  onAction: (action: AvailableGameAction) => void;
+}) {
+  return (
+    <section className="world-action-group">
+      <span>{title}</span>
+      {actions.map((action) => (
+        <button
+          key={action.id}
+          type="button"
+          disabled={submitting || !action.enabled}
+          title={action.disabled_reason ?? action.id}
+          onClick={() => onAction(action)}
+        >
+          {action.label}
+        </button>
+      ))}
+    </section>
   );
 }
 

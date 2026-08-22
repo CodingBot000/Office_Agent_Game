@@ -148,7 +148,7 @@ function App() {
     try {
       const response = await submitGameAction(snapshot.session_id, action.id);
       setSnapshot(response.snapshot);
-      setActionAlert(response.alert);
+      setActionAlert(response.blocked ? `차단됨: ${response.message} ${response.alert ?? ""}`.trim() : response.message);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "게임 행동 처리에 실패했습니다.");
     } finally {
@@ -264,7 +264,7 @@ function App() {
         onLocationChange={(location) => void syncVisualLocation(location)}
         onSelectNpc={setSelectedNpcId}
         onTalk={openDialogue}
-        onAction={(action) => void executeGameAction(action)}
+        onAction={executeGameAction}
       />
     );
   }
@@ -791,6 +791,9 @@ function GameActionPanel({
   submitting: boolean;
   onAction: (action: AvailableGameAction) => void;
 }) {
+  const heldItemActions = actions.filter((action) => action.scope === "held_item");
+  const locationActions = actions.filter((action) => action.scope !== "held_item");
+
   return (
     <section className="game-action-panel" aria-label="Game actions">
       <div className="section-heading">
@@ -799,24 +802,44 @@ function GameActionPanel({
       </div>
       {actions.length > 0 ? (
         <div className="game-action-list">
-          {actions.map((action) => (
-            <button
-              className="game-action-button"
-              key={action.id}
-              type="button"
-              disabled={submitting || !action.enabled}
-              title={action.disabled_reason ?? action.id}
-              onClick={() => onAction(action)}
-            >
-              <span>{action.label}</span>
-              <small>{action.family.replaceAll("_", " ")}</small>
-            </button>
-          ))}
+          {locationActions.length > 0 && <GameActionGroup title="CURRENT LOCATION" actions={locationActions} submitting={submitting} onAction={onAction} />}
+          {heldItemActions.length > 0 && <GameActionGroup title="HELD ITEM · 어디서나 사용 가능" actions={heldItemActions} submitting={submitting} onAction={onAction} />}
         </div>
       ) : (
         <p className="game-action-empty">No game actions available in this location.</p>
       )}
     </section>
+  );
+}
+
+function GameActionGroup({
+  title,
+  actions,
+  submitting,
+  onAction,
+}: {
+  title: string;
+  actions: AvailableGameAction[];
+  submitting: boolean;
+  onAction: (action: AvailableGameAction) => void;
+}) {
+  return (
+    <div className="game-action-group">
+      <p>{title}</p>
+      {actions.map((action) => (
+        <button
+          className="game-action-button"
+          key={action.id}
+          type="button"
+          disabled={submitting || !action.enabled}
+          title={action.disabled_reason ?? action.id}
+          onClick={() => onAction(action)}
+        >
+          <span>{action.label}</span>
+          <small>{action.scope.replaceAll("_", " ")} · {action.family.replaceAll("_", " ")}</small>
+        </button>
+      ))}
+    </div>
   );
 }
 

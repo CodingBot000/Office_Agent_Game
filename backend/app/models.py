@@ -68,6 +68,7 @@ GameActionFamily = Literal[
     "inspect_object",
     "throw_held_object",
 ]
+ActionScope = Literal["target", "held_item", "world"]
 
 
 class FactDefinition(BaseModel):
@@ -143,6 +144,7 @@ class WorldObjectDefinition(BaseModel):
 class WorldObjectState(WorldObjectDefinition):
     holder_id: str | None = None
     condition: Literal["normal", "damaged", "destroyed"] = "normal"
+    is_dropped: bool = False
 
 
 class AvailableGameAction(BaseModel):
@@ -151,6 +153,8 @@ class AvailableGameAction(BaseModel):
     label: str
     object_id: str | None = None
     target_id: str | None = None
+    owner_id: str | None = None
+    scope: ActionScope = "world"
     location: str
     enabled: bool = True
     disabled_reason: str | None = None
@@ -180,6 +184,7 @@ class GameActionTrace(BaseModel):
     location: str
     object_id: str | None = None
     owner_id: str | None = None
+    target_id: str | None = None
     holder_before: str | None = None
     holder_after: str | None = None
     condition_before: str | None = None
@@ -259,6 +264,7 @@ class NPCState(BaseModel):
     role: str
     personality: Personality
     dynamic_state: DynamicState
+    is_fallen: bool = False
     known_fact_ids: list[str] = Field(default_factory=list)
     known_facts: list[str] = Field(default_factory=list)
     beliefs: list[Belief] = Field(default_factory=list)
