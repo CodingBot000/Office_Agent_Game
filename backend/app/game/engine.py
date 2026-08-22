@@ -407,6 +407,7 @@ class GameEngine:
         severity: int,
         reason_codes: list[str],
         excluded_witness_ids: set[str] | None = None,
+        witness_location: str | None = None,
     ) -> None:
         if world_object.owner_id is None or world_object.owner_id not in session.npcs:
             return
@@ -424,7 +425,14 @@ class GameEngine:
         excluded_witness_ids = excluded_witness_ids or set()
         witnesses = [
             npc_id
-            for npc_id in self._derive_witnesses(session, classification, [world_object.owner_id], [], world_object.owner_id)
+            for npc_id in self._derive_witnesses(
+                session,
+                classification,
+                [world_object.owner_id],
+                [],
+                world_object.owner_id,
+                location=witness_location,
+            )
             if npc_id not in excluded_witness_ids
         ]
         outcome = self.relationship_policy.evaluate(
@@ -460,7 +468,8 @@ class GameEngine:
             reason_codes=["physical_danger", "property_damage"],
             confidence=1.0,
         )
-        witnesses = self._derive_witnesses(session, classification, [target_id], [], None)
+        impact_location = NPC_HOME_LOCATIONS.get(target_id, session.current_location)
+        witnesses = self._derive_witnesses(session, classification, [target_id], [], None, location=impact_location)
         outcome = self.relationship_policy.evaluate(
             classification,
             actor_id="player",
@@ -487,6 +496,7 @@ class GameEngine:
                 4,
                 ["property_violation", "property_damage"],
                 excluded_witness_ids={target_id},
+                witness_location=impact_location,
             )
 
     def _record_blocked_game_action(
@@ -942,13 +952,14 @@ class GameEngine:
             ),
         )
 
-    def _npc_ids_at_location(self, session: GameSession) -> list[str]:
-        if session.current_location == "meeting_room":
+    def _npc_ids_at_location(self, session: GameSession, location: str | None = None) -> list[str]:
+        resolved_location = location or session.current_location
+        if resolved_location == "meeting_room":
             return list(session.npcs)
         return [
             npc_id
             for npc_id in session.npcs
-            if NPC_HOME_LOCATIONS.get(npc_id) == session.current_location
+            if NPC_HOME_LOCATIONS.get(npc_id) == resolved_location
         ]
 
     def _validate_social_classification(
@@ -1052,13 +1063,14 @@ class GameEngine:
         direct_target_ids: list[str],
         affected_target_ids: list[str],
         object_owner_id: str | None,
+        location: str | None = None,
     ) -> list[str]:
         if not classification.observable:
             return []
         participants = {*direct_target_ids, *affected_target_ids}
         if object_owner_id:
             participants.add(object_owner_id)
-        return [npc_id for npc_id in self._npc_ids_at_location(session) if npc_id not in participants]
+        return [npc_id for npc_id in self._npc_ids_at_location(session, location) if npc_id not in participants]
 
     def _is_repeated_social_action(
         self,

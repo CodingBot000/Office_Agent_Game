@@ -792,7 +792,8 @@ function GameActionPanel({
   onAction: (action: AvailableGameAction) => void;
 }) {
   const heldItemActions = actions.filter((action) => action.scope === "held_item");
-  const locationActions = actions.filter((action) => action.scope !== "held_item");
+  const globalThrowActions = actions.filter((action) => action.family === "throw_held_object");
+  const locationActions = actions.filter((action) => action.scope !== "held_item" && action.family !== "throw_held_object");
 
   return (
     <section className="game-action-panel" aria-label="Game actions">
@@ -804,6 +805,7 @@ function GameActionPanel({
         <div className="game-action-list">
           {locationActions.length > 0 && <GameActionGroup title="CURRENT LOCATION" actions={locationActions} submitting={submitting} onAction={onAction} />}
           {heldItemActions.length > 0 && <GameActionGroup title="HELD ITEM · 어디서나 사용 가능" actions={heldItemActions} submitting={submitting} onAction={onAction} />}
+          {globalThrowActions.length > 0 && <GameActionGroup title="GLOBAL THROW TARGETS" actions={globalThrowActions} submitting={submitting} onAction={onAction} />}
         </div>
       ) : (
         <p className="game-action-empty">No game actions available in this location.</p>

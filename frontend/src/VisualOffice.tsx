@@ -164,6 +164,8 @@ export function VisualOffice({
   const [playerDirection, setPlayerDirection] = useState<SpriteDirection>("front");
   const [interactionOpen, setInteractionOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [playerActionOpen, setPlayerActionOpen] = useState(false);
+  const [selectedThrowObjectId, setSelectedThrowObjectId] = useState<string | null>(null);
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const [throwAnimation, setThrowAnimation] = useState<ThrowAnimation | null>(null);
   const keysRef = useRef<Set<string>>(new Set());
@@ -195,6 +197,18 @@ export function VisualOffice({
   }, [nearestNpc, snapshot.available_game_actions]);
   const targetActions = nearbyActions.filter((action) => action.scope !== "held_item");
   const heldItemActions = nearbyActions.filter((action) => action.scope === "held_item");
+  const globalThrowActions = useMemo(
+    () => snapshot.available_game_actions.filter((action) => action.family === "throw_held_object" && action.enabled),
+    [snapshot.available_game_actions],
+  );
+  const throwObjectIds = useMemo(
+    () => [...new Set(globalThrowActions.map((action) => action.object_id).filter((objectId): objectId is string => Boolean(objectId)))],
+    [globalThrowActions],
+  );
+  const selectedThrowActions = useMemo(
+    () => globalThrowActions.filter((action) => action.object_id === selectedThrowObjectId),
+    [globalThrowActions, selectedThrowObjectId],
+  );
   const droppedObjects = snapshot.world_objects.filter(
     (worldObject) => worldObject.is_dropped && worldObject.holder_id === null && worldObject.condition !== "destroyed",
   );
@@ -273,6 +287,13 @@ export function VisualOffice({
     }
   }, [nearestNpc]);
 
+  useEffect(() => {
+    if (playerActionOpen && throwObjectIds.length === 0) {
+      setPlayerActionOpen(false);
+      setSelectedThrowObjectId(null);
+    }
+  }, [playerActionOpen, throwObjectIds.length]);
+
   useEffect(() => () => {
     throwTimersRef.current.forEach((timer) => window.clearTimeout(timer));
   }, []);
@@ -288,6 +309,8 @@ export function VisualOffice({
 
   const executeVisualAction = async (action: AvailableGameAction) => {
     setActionMenuOpen(false);
+    setPlayerActionOpen(false);
+    setSelectedThrowObjectId(null);
     if (action.family === "throw_held_object" && action.object_id && action.target_id) {
       startThrowAnimation(action.target_id);
     }
@@ -301,6 +324,13 @@ export function VisualOffice({
       window.setTimeout(() => setThrowAnimation((current) => current ? { ...current, phase: "impact" } : null), 680),
       window.setTimeout(() => setThrowAnimation(null), 1160),
     ];
+  };
+
+  const openPlayerActionMenu = () => {
+    setInteractionOpen(false);
+    setActionMenuOpen(false);
+    setSelectedThrowObjectId(null);
+    setPlayerActionOpen(true);
   };
 
   return (
@@ -429,6 +459,38 @@ export function VisualOffice({
                 {heldObject && <img className="held-world-object" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="손에 든 키보드" />}
                 <span className="world-character-label">PLAYER</span>
               </div>
+
+              {throwObjectIds.length > 0 && !playerActionOpen && (
+                <button className="world-player-action-button" type="button" style={worldPointStyle({ x: playerPosition.x, y: playerPosition.y + 1.28 }, 1.2)} onClick={openPlayerActionMenu} disabled={submitting || snapshot.completed}>
+                  액션
+                </button>
+              )}
+
+              {playerActionOpen && (
+                <div className="player-action-panel">
+                  <div className="player-action-heading">
+                    <strong>{selectedThrowObjectId ? "대상 선택" : "던질 물건 선택"}</strong>
+                    <button type="button" onClick={() => { setPlayerActionOpen(false); setSelectedThrowObjectId(null); }}>닫기</button>
+                  </div>
+                  {!selectedThrowObjectId ? (
+                    <div className="player-action-list">
+                      {throwObjectIds.map((objectId) => {
+                        const worldObject = snapshot.world_objects.find((item) => item.id === objectId);
+                        return <button key={objectId} type="button" onClick={() => setSelectedThrowObjectId(objectId)}>{worldObject?.name ?? objectId} 던지기</button>;
+                      })}
+                    </div>
+                  ) : (
+                    <div className="player-action-list">
+                      <button className="player-action-back" type="button" onClick={() => setSelectedThrowObjectId(null)}>← 물건 다시 선택</button>
+                      {selectedThrowActions.map((action) => {
+                        const target = snapshot.npcs.find((npc) => npc.id === action.target_id);
+                        if (!target || target.is_fallen) return null;
+                        return <button key={action.id} type="button" onClick={() => void executeVisualAction(action)} disabled={submitting}>{target.name} · {target.role}</button>;
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {throwAnimation && (() => {
                 const target = npcWorldLayout[throwAnimation.targetId]?.point;

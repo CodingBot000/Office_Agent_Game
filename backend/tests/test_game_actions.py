@@ -70,7 +70,7 @@ def test_pickup_and_break_updates_holder_owner_relationship_and_memory() -> None
     assert broken.snapshot.game_action_traces[-1].condition_after == "destroyed"
 
 
-def test_held_item_actions_remain_available_and_throw_targets_current_npc() -> None:
+def test_held_item_actions_remain_available_and_throw_targets_all_active_npcs() -> None:
     engine = GameEngine()
     started = engine.create_session()
     move(engine, started.session_id, "dev_area")
@@ -91,6 +91,32 @@ def test_held_item_actions_remain_available_and_throw_targets_current_npc() -> N
     assert throw.scope == "target"
     assert throw.target_id == "pm_01"
     assert throw.owner_id == "backend_01"
+    assert {
+        "throw_backend_keyboard_at_backend_01",
+        "throw_backend_keyboard_at_frontend_01",
+        "throw_backend_keyboard_at_qa_01",
+        "throw_backend_keyboard_at_pm_01",
+    }.issubset(actions)
+
+
+def test_remote_throw_uses_target_location_for_witness_policy() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+    move(engine, started.session_id, "dev_area")
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_backend_keyboard"))
+    before_throw = engine.snapshot(engine.get_session(started.session_id))
+    pm_stress_before = next(npc for npc in before_throw.npcs if npc.id == "pm_01").dynamic_state.stress
+
+    thrown = engine.submit_game_action(
+        started.session_id,
+        GameActionRequest(action_id="throw_backend_keyboard_at_qa_01"),
+    )
+
+    qa = next(npc for npc in thrown.snapshot.npcs if npc.id == "qa_01")
+    pm = next(npc for npc in thrown.snapshot.npcs if npc.id == "pm_01")
+    assert qa.is_fallen is True
+    assert qa.dynamic_state.emotion == "afraid"
+    assert pm.dynamic_state.stress == pm_stress_before
 
 
 def test_drop_marks_held_item_as_dropped_at_current_location() -> None:

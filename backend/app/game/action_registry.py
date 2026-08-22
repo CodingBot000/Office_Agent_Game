@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.game.seed import NPC_HOME_LOCATIONS
 from app.models import AvailableGameAction, PlayerInventory
 
 if TYPE_CHECKING:
@@ -18,16 +17,6 @@ def build_player_inventory(session: GameSession) -> PlayerInventory:
         ),
         max_held_objects=1,
     )
-
-
-def _npc_ids_at_current_location(session: GameSession) -> list[str]:
-    if session.current_location == "meeting_room":
-        return list(session.npcs)
-    return [
-        npc_id
-        for npc_id in session.npcs
-        if NPC_HOME_LOCATIONS.get(npc_id) == session.current_location
-    ]
 
 
 def build_available_game_actions(session: GameSession) -> list[AvailableGameAction]:
@@ -59,7 +48,7 @@ def build_available_game_actions(session: GameSession) -> list[AvailableGameActi
                 )
             )
 
-            for npc_id in _npc_ids_at_current_location(session):
+            for npc_id in sorted(session.npcs):
                 npc = session.npcs[npc_id]
                 if npc.is_fallen:
                     continue
