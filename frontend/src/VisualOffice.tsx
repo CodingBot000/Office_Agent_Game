@@ -22,12 +22,18 @@ type VisualOfficeProps = {
   onLocationChange: (location: string) => void;
   onSelectNpc: (id: string) => void;
   onTalk: (id: string) => void;
-  onAction: (action: AvailableGameAction) => Promise<void>;
+  onAction: (action: AvailableGameAction) => Promise<boolean>;
 };
 
 type ThrowAnimation = {
   targetId: string;
   phase: "flying" | "impact";
+};
+
+type ThrowPresentation = {
+  targetId: string;
+  actionSucceeded: boolean;
+  impactReady: boolean;
 };
 
 const OFFICE_ASSET_BASE = "/office-assets";
@@ -173,6 +179,7 @@ export function VisualOffice({
   const completedRef = useRef(snapshot.completed);
   const lastLocationRef = useRef(getLocationForPoint(initialPosition));
   const throwTimersRef = useRef<number[]>([]);
+  const throwPresentationRef = useRef<ThrowPresentation | null>(null);
 
   const selectedNpc = useMemo(
     () => snapshot.npcs.find((npc) => npc.id === selectedNpcId) ?? snapshot.npcs[0] ?? null,
@@ -216,6 +223,10 @@ export function VisualOffice({
     (worldObject) => worldObject.is_dropped && worldObject.holder_id === null && worldObject.condition !== "destroyed",
   );
   const latestEvent = snapshot.events.slice(-1)[0] ?? null;
+  const isNpcVisuallyComatose = (npc: NPCState) => (
+    npc.physical_state === "comatose"
+    && !(throwAnimation?.targetId === npc.id && throwAnimation.phase === "flying")
+  );
 
   useEffect(() => {
     if (currentLocation === lastLocationRef.current) return;
@@ -323,19 +334,55 @@ export function VisualOffice({
     setActionMenuOpen(false);
     setPlayerActionOpen(false);
     setSelectedThrowObjectId(null);
-    if (action.family === "throw_held_object" && action.object_id && action.target_id) {
+    const isThrowAction = action.family === "throw_held_object" && action.object_id && action.target_id;
+    if (isThrowAction && action.target_id) {
       startThrowAnimation(action.target_id);
     }
-    await onAction(action);
+    const succeeded = await onAction(action);
+    if (isThrowAction) {
+      if (succeeded) {
+        completeThrowAction();
+      } else {
+        cancelThrowAnimation();
+      }
+    }
   };
 
   const startThrowAnimation = (targetId: string) => {
-    throwTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    cancelThrowAnimation();
+    throwPresentationRef.current = { targetId, actionSucceeded: false, impactReady: false };
     setThrowAnimation({ targetId, phase: "flying" });
-    throwTimersRef.current = [
-      window.setTimeout(() => setThrowAnimation((current) => current ? { ...current, phase: "impact" } : null), 680),
-      window.setTimeout(() => setThrowAnimation(null), 1160),
-    ];
+    throwTimersRef.current = [window.setTimeout(() => {
+      const current = throwPresentationRef.current;
+      if (!current || current.targetId !== targetId) return;
+      current.impactReady = true;
+      triggerThrowImpact(targetId);
+    }, 680)];
+  };
+
+  const completeThrowAction = () => {
+    const current = throwPresentationRef.current;
+    if (!current) return;
+    current.actionSucceeded = true;
+    triggerThrowImpact(current.targetId);
+  };
+
+  const triggerThrowImpact = (targetId: string) => {
+    const current = throwPresentationRef.current;
+    if (!current || current.targetId !== targetId || !current.actionSucceeded || !current.impactReady) return;
+    setThrowAnimation({ targetId, phase: "impact" });
+    throwTimersRef.current.push(window.setTimeout(() => {
+      if (throwPresentationRef.current?.targetId !== targetId) return;
+      throwPresentationRef.current = null;
+      setThrowAnimation(null);
+    }, 480));
+  };
+
+  const cancelThrowAnimation = () => {
+    throwTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    throwTimersRef.current = [];
+    throwPresentationRef.current = null;
+    setThrowAnimation(null);
   };
 
   const openPlayerActionMenu = () => {
@@ -423,9 +470,10 @@ export function VisualOffice({
                 if (!layout) return null;
                 const isSelected = npc.id === selectedNpcId;
                 const isNearby = npc.id === nearestNpc?.npc.id;
+                const isComatose = isNpcVisuallyComatose(npc);
                 return (
                   <button
-                    className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""} ${npc.physical_state === "comatose" ? "fallen" : ""} ${isFearOrShock(npc.dynamic_state.emotion) ? "shaking" : ""}`}
+                    className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""} ${isComatose ? "fallen" : ""} ${isFearOrShock(npc.dynamic_state.emotion) ? "shaking" : ""}`}
                     key={npc.id}
                     type="button"
                     style={worldPointStyle(layout.point, 2.1)}
@@ -433,8 +481,8 @@ export function VisualOffice({
                     aria-label={`${npc.name} 선택`}
                     disabled={false}
                   >
-                    <CharacterSprite asset={layout.asset} direction={npc.physical_state === "comatose" ? "front" : "back"} className={isFearOrShock(npc.dynamic_state.emotion) ? "fear-shake" : ""} />
-                    <span className="world-character-label">{npc.name}{npc.physical_state === "comatose" ? " · COMATOSE" : ""}</span>
+                    <CharacterSprite asset={layout.asset} direction={isComatose ? "front" : "back"} className={isFearOrShock(npc.dynamic_state.emotion) ? "fear-shake" : ""} />
+                    <span className="world-character-label">{npc.name}{isComatose ? " · COMATOSE" : ""}</span>
                     <span className={`world-emotion-dot ${npc.dynamic_state.emotion}`} />
                   </button>
                 );
@@ -496,7 +544,7 @@ export function VisualOffice({
                       <button className="player-action-back" type="button" onClick={() => setSelectedThrowObjectId(null)}>← 물건 다시 선택</button>
                       {selectedThrowActions.map((action) => {
                         const target = snapshot.npcs.find((npc) => npc.id === action.target_id);
-                        if (!target || target.physical_state === "comatose") return null;
+                        if (!target || isNpcVisuallyComatose(target)) return null;
                         return <button key={action.id} type="button" onClick={() => void executeVisualAction(action)} disabled={submitting}>{target.name} · {target.role}</button>;
                       })}
                     </div>
@@ -558,9 +606,9 @@ export function VisualOffice({
             <div className="visual-panel-heading"><span>TEAM MEMBERS</span><span className="panel-count">{snapshot.npcs.length} ACTIVE</span></div>
             <div className="visual-team-list">
               {snapshot.npcs.map((npc) => (
-                <button className={`${npc.id === selectedNpcId ? "selected" : ""} ${npc.physical_state === "comatose" ? "fallen" : ""}`} type="button" key={npc.id} onClick={() => selectNpc(npc.id)}>
+                <button className={`${npc.id === selectedNpcId ? "selected" : ""} ${isNpcVisuallyComatose(npc) ? "fallen" : ""}`} type="button" key={npc.id} onClick={() => selectNpc(npc.id)}>
                   <span className="team-avatar"><CharacterSprite asset={npcWorldLayout[npc.id]?.asset ?? ""} direction="back" className={isFearOrShock(npc.dynamic_state.emotion) ? "fear-shake" : ""} /></span>
-                  <span><strong>{npc.name}</strong><small>{npc.physical_state === "comatose" ? "혼수상태" : npc.role}</small></span>
+                  <span><strong>{npc.name}</strong><small>{isNpcVisuallyComatose(npc) ? "혼수상태" : npc.role}</small></span>
                   <i className={`team-presence ${npc.dynamic_state.emotion}`} />
                 </button>
               ))}
@@ -569,7 +617,7 @@ export function VisualOffice({
 
           {selectedNpc && (
             <section className="visual-panel selected-panel">
-              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{selectedNpc.physical_state === "comatose" ? "COMATOSE" : selectedNpc.dynamic_state.emotion}</span></div>
+              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{isNpcVisuallyComatose(selectedNpc) ? "COMATOSE" : selectedNpc.dynamic_state.emotion}</span></div>
               <div className="visual-selected-person"><CharacterSprite asset={npcWorldLayout[selectedNpc.id]?.asset ?? ""} direction="back" className={isFearOrShock(selectedNpc.dynamic_state.emotion) ? "fear-shake" : ""} /><div><strong>{selectedNpc.name}</strong><small>{selectedNpc.role}</small></div></div>
               <div className="visual-metrics">
                 <MetricBar label="STRESS" value={selectedNpc.dynamic_state.stress} tone="amber" />
@@ -579,7 +627,7 @@ export function VisualOffice({
               {nearestNpc?.npc.id === selectedNpc.id ? (
                 <button className="visual-interact-button" type="button" onClick={() => setInteractionOpen(true)} disabled={submitting || snapshot.completed}>E · INTERACT</button>
               ) : (
-                <p className="visual-distance-note">{selectedNpc.physical_state === "comatose" ? "혼수상태로 대화할 수 없지만 물건과 액션은 상호작용할 수 있습니다." : "NPC에게 가까이 가면 상호작용할 수 있습니다."}</p>
+                <p className="visual-distance-note">{isNpcVisuallyComatose(selectedNpc) ? "혼수상태로 대화할 수 없지만 물건과 액션은 상호작용할 수 있습니다." : "NPC에게 가까이 가면 상호작용할 수 있습니다."}</p>
               )}
             </section>
           )}

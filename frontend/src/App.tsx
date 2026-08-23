@@ -147,8 +147,8 @@ function App() {
     }
   }
 
-  async function executeGameAction(action: AvailableGameAction) {
-    if (!snapshot || submitting || snapshot.completed || !action.enabled) return;
+  async function executeGameAction(action: AvailableGameAction): Promise<boolean> {
+    if (!snapshot || submitting || snapshot.completed || !action.enabled) return false;
     setSubmitting(true);
     setError(null);
     setActionAlert(null);
@@ -156,8 +156,10 @@ function App() {
       const response = await submitGameAction(snapshot.session_id, action.id);
       setSnapshot(response.snapshot);
       setActionAlert(response.blocked ? `차단됨: ${response.message} ${response.alert ?? ""}`.trim() : response.message);
+      return !response.blocked;
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "게임 행동 처리에 실패했습니다.");
+      return false;
     } finally {
       setSubmitting(false);
     }
