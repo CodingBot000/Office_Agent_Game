@@ -362,7 +362,9 @@ export function VisualOffice({
   const startThrowAnimation = (action: AvailableGameAction) => {
     if (!action.target_id || !action.object_id) return;
     const object = snapshot.world_objects.find((worldObject) => worldObject.id === action.object_id);
-    const impact = object?.throw_impact ?? (object?.throw_effect === "support" ? "blink" : "split");
+    const impact = action.object_id === "team_leader_person" || action.object_id === "division_head_person"
+      ? "blink"
+      : object?.throw_impact ?? (object?.throw_effect === "support" ? "blink" : "split");
     const targetId = action.target_id;
     cancelThrowAnimation();
     throwPresentationRef.current = { targetId, objectId: action.object_id, impact, actionSucceeded: false, impactReady: false };

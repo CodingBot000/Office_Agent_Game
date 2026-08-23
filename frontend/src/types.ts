@@ -252,7 +252,18 @@ export interface SocialEventTrace {
 export interface FallbackNotice {
   id: number;
   turn: number;
-  stage: "intent_provider" | "intent_guardrail" | "decision_provider" | "decision_guardrail" | "social_impact_provider" | "social_impact_guardrail";
+  stage:
+    | "intent_provider"
+    | "intent_guardrail"
+    | "decision_provider"
+    | "decision_guardrail"
+    | "decision_disclosure_guardrail"
+    | "decision_fact_consistency_guardrail"
+    | "decision_responsibility_routing"
+    | "decision_unavailable_role_guardrail"
+    | "decision_discovered_evidence_followup"
+    | "social_impact_provider"
+    | "social_impact_guardrail";
   provider: "cli" | "openai" | "deterministic-mock";
   reason: string;
   created_at: string;
@@ -298,6 +309,9 @@ export interface ActionResponse {
   intent_provider: "cli" | "openai" | "deterministic-mock" | "ui";
   intent_confidence: number;
   intent_fallback_used: boolean;
+  question_type: QuestionType;
+  reference_scope: ReferenceScope;
+  evidence_id: string | null;
   social_impact_provider: "cli" | "openai" | "deterministic-mock" | null;
   social_impact_fallback_used: boolean;
   blocked: boolean;
@@ -316,8 +330,22 @@ export interface IntentClassification {
   intent: string;
   interaction_kind?: "dialogue" | "game_action_attempt";
   game_action_family?: string | null;
+  question_type?: QuestionType;
+  reference_scope?: ReferenceScope;
   target_npc_id?: string | null;
   evidence_id?: string | null;
   location?: "meeting_room" | "dev_area" | "qa_desk" | "pm_desk" | null;
   confidence?: number;
 }
+
+export type QuestionType =
+  | "none"
+  | "general_status"
+  | "cause_analysis"
+  | "evidence_request"
+  | "evidence_followup"
+  | "responsibility_routing"
+  | "approval_process"
+  | "relationship_action";
+
+export type ReferenceScope = "none" | "explicit" | "latest_discovered" | "conversation_context";
