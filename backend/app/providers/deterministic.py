@@ -62,7 +62,25 @@ class DeterministicIntentProvider:
             )
         ):
             return self._result("social_action", target_npc_id, 0.8)
-        if any(keyword in normalized for keyword in ("증거", "메시지", "로그 확인", "기록 확인", "inspect", "조사")):
+        if any(
+            keyword in normalized
+            for keyword in (
+                "증거",
+                "메시지",
+                "로그 확인",
+                "기록 확인",
+                "inspect",
+                "조사",
+                "에러명",
+                "오류명",
+                "에러 내용",
+                "오류 내용",
+                "무슨 이슈",
+                "어떤 이슈",
+                "치명적 이슈",
+                "critical issue",
+            )
+        ):
             if any(keyword in normalized for keyword in ("보여", "보여줘", "보여줄", "확인", "요청", "알려")):
                 return self._result("request_evidence", target_npc_id, 0.8, self._resolve_evidence(normalized))
             if any(keyword in normalized for keyword in ("제시", "전달", "공개", "backend", "백엔드")):
@@ -186,6 +204,31 @@ class DeterministicDecisionProvider:
                 cooperation_delta=0,
                 knowledge_refs=list(npc.known_fact_ids),
                 action_type="dialogue",
+                dialogue=dialogue,
+            )
+
+        if context.mode == "show_evidence":
+            if "repeated_presentation" in context.player_input:
+                dialogue = "이 증거는 이미 확인했습니다. 같은 내용을 다시 제시해도 판단은 달라지지 않습니다."
+            elif "same_source_acknowledgement" in context.player_input:
+                dialogue = "이 메시지는 제가 보낸 경고입니다. 이미 알고 있는 내용이니, 어떻게 처리됐는지 확인해 주세요."
+            elif npc.id == "backend_01":
+                dialogue = "QA 경고가 있었던 것은 확인했습니다. 당시 배포 판단 과정을 다시 검토하겠습니다."
+            elif npc.id == "frontend_01":
+                dialogue = "QA 경고와 API 변경 내용을 함께 확인해 보겠습니다. 프론트엔드 반영 시점도 다시 점검하겠습니다."
+            elif npc.id == "pm_01":
+                dialogue = "배포 전에 이런 경고가 있었다면 일정과 승인 과정에서 검토했어야 합니다."
+            else:
+                dialogue = "제시된 증거를 확인했습니다. 이 내용이 어떻게 처리됐는지 함께 확인해 보겠습니다."
+
+            return AgentDecision(
+                npc_id=npc.id,
+                emotion=npc.dynamic_state.emotion,
+                stress_delta=0,
+                trust_delta=0,
+                cooperation_delta=0,
+                grounding_type="acknowledgement",
+                action_type="show_evidence",
                 dialogue=dialogue,
             )
 

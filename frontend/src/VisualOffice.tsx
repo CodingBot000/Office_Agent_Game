@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { formatWorldObjectName, GameActionLabel } from "./display";
+import { formatEmotion, formatWorldObjectName, GameActionLabel } from "./display";
 import type { AvailableGameAction, GameSnapshot, NPCState } from "./types";
 
 export type VisualMode = "dialogue" | "visual";
@@ -438,7 +438,7 @@ export function VisualOffice({
               <h2>{locationLabels[currentLocation] ?? currentLocation.replaceAll("_", " ")}</h2>
             </div>
             <div className="visual-stage-stats">
-              <span><i className="status-light" /> BACKEND LINKED</span>
+              <span><i className="status-light" /> 서버 연결됨</span>
               <span>{snapshot.events.length} EVENTS</span>
             </div>
           </div>
@@ -645,7 +645,7 @@ export function VisualOffice({
 
           {selectedNpc && (
             <section className="visual-panel selected-panel">
-              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{isNpcVisuallyComatose(selectedNpc) ? "COMATOSE" : selectedNpc.dynamic_state.emotion}</span></div>
+              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{isNpcVisuallyComatose(selectedNpc) ? "혼수상태" : formatEmotion(selectedNpc.dynamic_state.emotion)}</span></div>
               <div className="visual-selected-person"><CharacterSprite asset={npcWorldLayout[selectedNpc.id]?.asset ?? ""} direction="back" className={isFearOrShock(selectedNpc.dynamic_state.emotion) ? "fear-shake" : ""} /><div><strong>{selectedNpc.name}</strong><small>{selectedNpc.role}</small></div></div>
               <div className="visual-metrics">
                 <MetricBar label="STRESS" value={selectedNpc.dynamic_state.stress} tone="amber" />

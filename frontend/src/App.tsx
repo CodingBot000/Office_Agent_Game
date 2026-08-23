@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
-import { formatWorldObjectName, GameActionLabel } from "./display";
+import { formatEmotion, formatWorldObjectName, GameActionLabel } from "./display";
 import { ModeChooser, VisualOffice } from "./VisualOffice";
 import type {
   AvailableGameAction,
   AgentTrace,
+  Evidence,
   GameSnapshot,
   IntentClassification,
   NPCState,
@@ -450,6 +451,19 @@ function App() {
               submitting={submitting || snapshot.completed}
               onAction={(action) => void executeGameAction(action)}
             />
+            <DiscoveredEvidencePanel
+              evidences={snapshot.evidences}
+              target={selectedNpc}
+              submitting={submitting || snapshot.completed}
+              onPresent={(evidence) => {
+                const targetName = selectedNpc?.name ?? "현재 대화 상대";
+                void executeCommand(
+                  evidence.title + " 증거를 " + targetName + "에게 제시해줘.",
+                  undefined,
+                  selectedNpc?.id ?? null,
+                );
+              }}
+            />
             <form className="command-form" onSubmit={runCommand}>
               <span className="prompt-symbol">&gt;</span>
               <input
@@ -539,7 +553,7 @@ function App() {
 
               <div className="state-grid">
                 <Metric label="PHYSICAL STATE" value={selectedNpc.physical_state === "comatose" ? "COMATOSE" : "NORMAL"} />
-                <Metric label="EMOTION" value={selectedNpc.dynamic_state.emotion} />
+                <Metric label="EMOTION" value={formatEmotion(selectedNpc.dynamic_state.emotion)} />
                 <Metric label="STRESS" value={`${selectedNpc.dynamic_state.stress}%`} />
                 <Metric label="TRUST" value={`${selectedRelationship?.trust ?? selectedNpc.dynamic_state.trust_toward_player}`} />
                 <Metric label="COOPERATION" value={`${selectedNpc.dynamic_state.cooperation}%`} />
@@ -768,7 +782,7 @@ function AgentInspectorPanel({
         <div className="trace-block">
           <div className="trace-line"><span>ACTION</span><b>{latestTrace.decision.action_type}</b></div>
           <div className="trace-line"><span>GROUNDING</span><b>{latestTrace.decision.grounding_type}</b></div>
-          <div className="trace-line"><span>EMOTION</span><b>{latestTrace.decision.emotion}</b></div>
+          <div className="trace-line"><span>EMOTION</span><b>{formatEmotion(latestTrace.decision.emotion)}</b></div>
           <div className="trace-line"><span>STRESS DELTA</span><b>{formatDelta(latestTrace.decision.stress_delta)}</b></div>
           <div className="trace-line"><span>TRUST DELTA</span><b>{formatDelta(latestTrace.decision.trust_delta)}</b></div>
           <div className="trace-line"><span>COOPERATION DELTA</span><b>{formatDelta(latestTrace.decision.cooperation_delta)}</b></div>
@@ -827,6 +841,46 @@ function GameActionPanel({
       ) : (
         <p className="game-action-empty">No game actions available in this location.</p>
       )}
+    </section>
+  );
+}
+
+function DiscoveredEvidencePanel({
+  evidences,
+  target,
+  submitting,
+  onPresent,
+}: {
+  evidences: Evidence[];
+  target: NPCState | null;
+  submitting: boolean;
+  onPresent: (evidence: Evidence) => void;
+}) {
+  const discovered = evidences.filter((evidence) => evidence.discovered);
+  if (!target || discovered.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="evidence-present-panel">
+      <div className="section-heading">
+        <span>DISCOVERED EVIDENCE</span>
+        <span className="muted-label">PRESENT TO {target.name.toUpperCase()}</span>
+      </div>
+      <div className="evidence-present-list">
+        {discovered.map((evidence) => (
+          <button
+            className="evidence-present-button"
+            key={evidence.id}
+            type="button"
+            disabled={submitting}
+            onClick={() => onPresent(evidence)}
+          >
+            <strong>증거 제시하기</strong>
+            <span>{evidence.title}</span>
+          </button>
+        ))}
+      </div>
     </section>
   );
 }

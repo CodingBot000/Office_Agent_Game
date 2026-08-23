@@ -3,7 +3,7 @@ import logging
 from app.game import engine as engine_module
 from app.game.engine import AVAILABLE_ACTIONS, GameEngine
 from app.models import AgentDecision, FactDefinition, IncidentReportRequest, IntentClassification, Memory, RelationshipUpdate
-from app.providers.deterministic import DeterministicDecisionProvider
+from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
 
 
 class FixedIntentProvider:
@@ -237,6 +237,85 @@ def test_evidence_propagates_to_backend_belief() -> None:
     backend = next(npc for npc in response.snapshot.npcs if npc.id == "backend_01")
     assert any("ignored QA warning" in belief.belief for belief in backend.beliefs)
     assert response.snapshot.agent_traces[-1].npc_id == "backend_01"
+
+
+def test_evidence_presentation_has_recipient_specific_reaction() -> None:
+    for target_id, expected_phrase in (
+        ("qa_01", "제가 보낸 경고"),
+        ("backend_01", "배포 판단"),
+        ("frontend_01", "프론트엔드 반영"),
+        ("pm_01", "일정과 승인"),
+    ):
+        engine = GameEngine(provider=DeterministicDecisionProvider())
+        session = engine.get_session(engine.create_session().session_id)
+        engine._discover_evidence(session, "qa_warning_message")
+
+        response = engine._show_evidence(session, target_id, "qa_warning_message")
+
+        assert "증거를 제시했습니다." in response
+        assert expected_phrase in response
+        assert session.events[-1].actor_id == target_id
+        assert session.events[-1].event_type == "evidence"
+
+
+def test_repeated_evidence_presentation_has_no_second_state_change() -> None:
+    engine = GameEngine(provider=DeterministicDecisionProvider())
+    session = engine.get_session(engine.create_session().session_id)
+    engine._discover_evidence(session, "qa_warning_message")
+
+    engine._show_evidence(session, "backend_01", "qa_warning_message")
+    backend = session.npcs["backend_01"]
+    first_stress = backend.dynamic_state.stress
+    first_trust = backend.dynamic_state.trust_toward_player
+
+    repeated = engine._show_evidence(session, "backend_01", "qa_warning_message")
+
+    assert "이미 확인했습니다" in repeated
+    assert backend.dynamic_state.stress == first_stress
+    assert backend.dynamic_state.trust_toward_player == first_trust
+
+
+def test_selected_dialogue_target_overrides_misclassified_npc() -> None:
+    class WrongTargetIntentProvider:
+        name = "cli"
+        model = "gpt-5.6-luna"
+
+        def classify(self, context: object) -> IntentClassification:
+            return IntentClassification(intent="talk", target_npc_id="qa_01", confidence=0.95)
+
+    engine = GameEngine(
+        provider=DeterministicDecisionProvider(),
+        intent_provider=WrongTargetIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(
+        snapshot.session_id,
+        "배포 판단 과정을 설명해줘.",
+        target_hint="backend_01",
+    )
+
+    assert response.snapshot.events[-1].actor == "Backend Developer"
+    assert response.snapshot.events[-1].actor_id == "backend_01"
+
+
+def test_concrete_issue_question_reveals_qa_evidence() -> None:
+    engine = GameEngine(
+        provider=DeterministicDecisionProvider(),
+        intent_provider=DeterministicIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(
+        snapshot.session_id,
+        "QA에게 무슨 이슈가 있었는지 에러명을 알려줘.",
+        target_hint="qa_01",
+    )
+
+    warning = next(evidence for evidence in response.snapshot.evidences if evidence.id == "qa_warning_message")
+    assert response.classified_action == "request_evidence"
+    assert warning.discovered is True
+    assert "API response mismatch" in response.message
 
 
 def test_invalid_agent_action_is_rejected_with_visible_fallback(caplog) -> None:

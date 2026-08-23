@@ -737,6 +737,20 @@ class GameEngine:
         text: str,
         target_hint: str | None = None,
     ) -> tuple[IntentClassification, bool]:
+        if self._is_explicit_evidence_request(text):
+            evidence_id = self._evidence_from_text(text) or "qa_warning_message"
+            target_id = target_hint or ("qa_01" if "qa" in text.casefold() else None)
+            if target_id in session.npcs and evidence_id in session.evidences:
+                return (
+                    IntentClassification(
+                        intent="request_evidence",
+                        target_npc_id=target_id,
+                        evidence_id=evidence_id,
+                        confidence=1.0,
+                    ),
+                    False,
+                )
+
         context = IntentContext(
             player_input=text,
             current_location=session.current_location,
@@ -760,8 +774,42 @@ class GameEngine:
             )
             candidate = self.intent_fallback_provider.classify(context)
             provider_fallback = True
+
+        if target_hint and candidate.intent in {
+            "talk",
+            "ask",
+            "accuse",
+            "defend",
+            "show_evidence",
+            "request_evidence",
+            "social_action",
+        }:
+            candidate = candidate.model_copy(update={"target_npc_id": target_hint})
+
         validated, validation_fallback = self._validate_intent(session, context, candidate)
         return validated, provider_fallback or validation_fallback
+
+    def _is_explicit_evidence_request(self, text: str) -> bool:
+        normalized = text.casefold()
+        direct_terms = (
+            "에러명",
+            "오류명",
+            "에러 메시지",
+            "오류 메시지",
+            "에러 내용",
+            "오류 내용",
+            "무슨 이슈",
+            "어떤 이슈",
+            "치명적 이슈",
+            "critical issue",
+        )
+        if any(term in normalized for term in direct_terms):
+            return True
+
+        return (
+            any(term in normalized for term in ("에러", "오류", "이슈"))
+            and any(term in normalized for term in ("알려", "말해", "설명", "보여", "뭐야", "무엇"))
+        )
 
     def _validate_intent_hint(self, session: GameSession, candidate: IntentClassification) -> IntentClassification:
         if candidate.intent != "move":
@@ -1412,7 +1460,12 @@ class GameEngine:
         evidence_id = evidence_id or self._evidence_from_text(text) or "release_timeline"
         self._discover_evidence(session, evidence_id)
         evidence = session.evidences[evidence_id]
-        self._append_event(session, "Player", f"Evidence 확인: {evidence.title}", "evidence")
+        self._append_event(
+            session,
+            "System",
+            f"증거를 확보했습니다. {evidence.title}를 공개했습니다.\n{evidence.content}",
+            "evidence",
+        )
         return evidence.content
 
     def _show_evidence(self, session: GameSession, target_id: str | None, evidence_id: str | None = None) -> str:
@@ -1429,11 +1482,163 @@ class GameEngine:
             return message
         evidence = session.evidences[evidence_id]
         target = target_id or "qa_01"
-        if target in session.npcs:
-            self._append_event(session, "Player", f"{session.npcs[target].name}에게 {evidence.title}를 제시했습니다.", "evidence")
-            if target == "backend_01" and evidence_id == "qa_warning_message":
-                self._update_backend_after_warning(session)
-                return "Backend Developer가 QA 경고를 확인했습니다. 위험을 알고도 배포했는지 되짚기 시작합니다."
+        npc = session.npcs.get(target)
+        if npc is None:
+            return evidence.content
+
+        presentation_count = self._evidence_presentation_count(session, target, evidence.title)
+        policy = self._evidence_presentation_policy(session, npc, evidence, presentation_count)
+        self._append_event(session, "Player", f"{npc.name}에게 {evidence.title}를 제시했습니다.", "evidence", target)
+
+        policy_context = (
+            "Evidence presentation reaction.\n"
+            f"reaction_policy={policy['reaction_type']}\n"
+            f"evidence_id={evidence.id}\n"
+            f"evidence_title={evidence.title}\n"
+            f"evidence_content={evidence.content}\n"
+            "Respond to the evidence without inventing facts or changing the supplied evidence."
+        )
+        decision, provider_fallback = self._request_decision(session, npc, "show_evidence", policy_context)
+        safe_decision = decision.model_copy(
+            update={
+                "npc_id": npc.id,
+                "emotion": policy["emotion"],
+                "stress_delta": policy["stress_delta"],
+                "trust_delta": policy["trust_delta"],
+                "cooperation_delta": policy["cooperation_delta"],
+                "belief_updates": policy["belief_updates"],
+                "relationship_updates": [],
+                "grounding_type": "acknowledgement",
+                "knowledge_refs": [],
+                "memory_candidate": policy["memory_candidate"],
+                "action_type": "show_evidence",
+                "action_target": evidence.id,
+                "dialogue": decision.dialogue.strip() or policy["fallback_dialogue"],
+            }
+        )
+        applied_decision = self._apply_decision(
+            session,
+            npc,
+            safe_decision,
+            f"Player presented {evidence.title} to {npc.name}.",
+            provider_fallback,
+        )
+        response_message = f"{evidence.content}\n증거를 제시했습니다. {applied_decision.dialogue}"
+        self._append_event(session, npc.name, response_message, "evidence", target)
+        return response_message
+
+    def _evidence_presentation_count(self, session: GameSession, target_id: str, evidence_title: str) -> int:
+        return sum(
+            1
+            for event in session.events
+            if event.actor_id == target_id
+            and event.actor == "Player"
+            and event.event_type == "evidence"
+            and evidence_title in event.message
+        )
+
+    def _evidence_presentation_policy(
+        self,
+        session: GameSession,
+        npc: NPCState,
+        evidence: Evidence,
+        presentation_count: int,
+    ) -> dict[str, object]:
+        if presentation_count > 0:
+            return {
+                "reaction_type": "repeated_presentation",
+                "emotion": npc.dynamic_state.emotion,
+                "stress_delta": 0,
+                "trust_delta": 0,
+                "cooperation_delta": 0,
+                "belief_updates": [],
+                "memory_candidate": None,
+                "fallback_dialogue": "이 증거는 이미 확인했습니다. 같은 내용을 다시 제시해도 판단은 달라지지 않습니다.",
+            }
+
+        if evidence.source_npc_id == npc.id:
+            return {
+                "reaction_type": "same_source_acknowledgement",
+                "emotion": npc.dynamic_state.emotion,
+                "stress_delta": 0,
+                "trust_delta": 0,
+                "cooperation_delta": 1,
+                "belief_updates": [],
+                "memory_candidate": Memory(
+                    summary=f"Player asked {npc.name} to confirm the evidence they provided.",
+                    importance=0.55,
+                    turn=session.turn,
+                ),
+                "fallback_dialogue": "이 메시지는 제가 보낸 경고입니다. 이미 알고 있는 내용이니, 어떻게 처리됐는지 확인해 주세요.",
+            }
+
+        if npc.id == "backend_01" and evidence.id == "qa_warning_message":
+            belief = Belief(
+                subject="incident",
+                belief="The ignored QA warning and API schema change jointly enabled the outage.",
+                confidence=0.85,
+            )
+            return {
+                "reaction_type": "accountability_pressure",
+                "emotion": "uneasy",
+                "stress_delta": 8,
+                "trust_delta": 3,
+                "cooperation_delta": 1,
+                "belief_updates": [belief],
+                "memory_candidate": Memory(
+                    summary="Player presented the QA warning message during the incident review.",
+                    importance=0.7,
+                    turn=session.turn,
+                ),
+                "fallback_dialogue": "QA 경고가 있었던 것은 확인했습니다. 당시 배포 판단 과정을 다시 검토하겠습니다.",
+            }
+
+        if npc.id == "frontend_01":
+            return {
+                "reaction_type": "cross_role_review",
+                "emotion": "focused",
+                "stress_delta": 3,
+                "trust_delta": 1,
+                "cooperation_delta": 3,
+                "belief_updates": [],
+                "memory_candidate": Memory(
+                    summary="Player presented QA evidence for cross-role API review.",
+                    importance=0.65,
+                    turn=session.turn,
+                ),
+                "fallback_dialogue": "QA 경고와 API 변경 내용을 함께 확인해 보겠습니다. 프론트엔드 반영 시점도 다시 점검하겠습니다.",
+            }
+
+        if npc.id == "pm_01":
+            return {
+                "reaction_type": "accountability_pressure",
+                "emotion": "concerned",
+                "stress_delta": 4,
+                "trust_delta": 1,
+                "cooperation_delta": 2,
+                "belief_updates": [],
+                "memory_candidate": Memory(
+                    summary="Player presented QA evidence about the deployment decision.",
+                    importance=0.65,
+                    turn=session.turn,
+                ),
+                "fallback_dialogue": "배포 전에 이런 경고가 있었다면 일정과 승인 과정에서 검토했어야 합니다.",
+            }
+
+        return {
+            "reaction_type": "cross_role_review",
+            "emotion": "uneasy",
+            "stress_delta": 2,
+            "trust_delta": 1,
+            "cooperation_delta": 1,
+            "belief_updates": [],
+            "memory_candidate": Memory(
+                summary=f"Player presented {evidence.title} during the incident review.",
+                importance=0.6,
+                turn=session.turn,
+            ),
+            "fallback_dialogue": "제시된 증거를 확인했습니다. 이 내용이 어떻게 처리됐는지 함께 확인해 보겠습니다.",
+        }
         return evidence.content
 
     def _request_evidence(
@@ -1450,7 +1655,7 @@ class GameEngine:
         self._append_event(
             session,
             actor,
-            f"{evidence.title}를 공개했습니다.\n{evidence.content}",
+            f"증거를 확보했습니다. {evidence.title}를 공개했습니다.\n{evidence.content}",
             "evidence",
             target_id,
         )

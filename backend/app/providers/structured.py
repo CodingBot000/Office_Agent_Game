@@ -72,6 +72,8 @@ Rules:
   private canonical knowledge unless the supporting Fact ID is also in available_facts.
 - Keep action_type within this vocabulary: dialogue, show_evidence, belief_update.
 - action_target must be null or one of the supplied NPC/evidence IDs.
+- When mode is show_evidence, acknowledge the supplied evidence and reaction policy.
+  Do not invent evidence content, additional actors, or unsupported consequences.
 - Use the NPC's personality, dynamic state, beliefs, relationships, and memories.
 - Keep dialogue short, natural, and grounded only in the supplied context.
 
@@ -105,10 +107,13 @@ Rules:
 - Set interaction_kind=game_action_attempt for physical/object operations such as picking up, breaking,
   dropping, or throwing an office object. Set game_action_family when this applies.
 - Natural-language game_action_attempts are never executed by the server; the UI must use the supplied buttons.
-- target_hint is a non-authoritative UI hint; still classify intent from the actual dialogue.
+- target_hint is the NPC selected by the player in the current dialogue UI. Use it as the target for
+  dialogue, evidence, and social actions unless the request is a movement or meeting command.
 - Use only the supplied IDs for target_npc_id and evidence_id.
 - request_evidence means the Player asks an NPC to reveal evidence to the Player. Requests such as
   "show me the warning" or "can you show the message?" are request_evidence.
+- Questions asking for the concrete issue, error name, error message, critical issue details, or
+  exact warning should be request_evidence when a matching evidence record exists.
 - show_evidence means the Player presents evidence they already possess to an NPC. Only choose it
   when evidence_id is present in discovered_evidence_ids.
 - Use location only for move or summon_meeting intents.
