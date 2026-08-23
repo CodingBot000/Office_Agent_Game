@@ -189,7 +189,7 @@ class DeterministicDecisionProvider:
 
         if context.mode == "ask":
             if npc.id == "qa_01":
-                dialogue = "배포 20분 전에 Critical Issue를 발견했고, 배포를 막아야 한다고 메시지를 보냈습니다."
+                dialogue = "배포 전 검증 로그와 API 응답을 대조하고 있습니다. 정확한 내용은 증거를 요청하시면 공유하겠습니다."
             elif npc.id == "backend_01":
                 dialogue = "API 응답 스키마를 바꿨습니다. 일정이 촉박했지만 배포는 진행해야 한다고 판단했습니다."
             elif npc.id == "frontend_01":

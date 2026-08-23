@@ -1777,14 +1777,20 @@ class GameEngine:
                 if fact_id in FACT_REGISTRY
             ),
             available_evidence_ids=tuple(session.evidences),
-            recent_events=tuple(
-                f"TURN {event.turn} · {event.actor}: {event.message}"
-                for event in session.events[-8:]
-            ),
+            recent_events=self._decision_recent_events(session, mode),
             incident_rules=tuple(INCIDENT_RULES),
         )
         try:
-            return self.provider.decide(context), False
+            decision = self.provider.decide(context)
+            if mode in {"talk", "ask"} and self._contains_evidence_leak(session, decision.dialogue):
+                self._record_fallback(
+                    session,
+                    stage="decision_disclosure_guardrail",
+                    provider=self.provider.name,
+                    reason="Normal dialogue attempted to disclose protected evidence content.",
+                )
+                return self.fallback_provider.decide(context), True
+            return decision, False
         except ProviderError as exc:
             self._record_fallback(
                 session,
@@ -1793,6 +1799,29 @@ class GameEngine:
                 reason=str(exc),
             )
             return self.fallback_provider.decide(context), True
+
+    def _decision_recent_events(self, session: GameSession, mode: str) -> tuple[str, ...]:
+        if mode not in {"talk", "ask"}:
+            return tuple(f"TURN {event.turn} · {event.actor}: {event.message}" for event in session.events[-8:])
+
+        redacted = []
+        for event in session.events[-8:]:
+            if event.event_type == "evidence":
+                redacted.append(f"TURN {event.turn} · {event.actor}: 증거 관련 이벤트가 기록되었습니다.")
+            else:
+                redacted.append(f"TURN {event.turn} · {event.actor}: {event.message}")
+        return tuple(redacted)
+
+    def _contains_evidence_leak(self, session: GameSession, dialogue: str) -> bool:
+        normalized = dialogue.casefold()
+        for evidence in session.evidences.values():
+            if evidence.title and evidence.title.casefold() in normalized:
+                return True
+            if evidence.content and len(evidence.content) >= 24:
+                content_prefix = evidence.content[:24].casefold()
+                if content_prefix in normalized:
+                    return True
+        return False
 
     def _apply_decision(
         self,

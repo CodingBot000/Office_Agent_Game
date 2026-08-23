@@ -79,7 +79,8 @@ def test_korean_colloquial_question_reaches_ask_action() -> None:
     response = engine.submit_action(snapshot.session_id, "QA에게 배포전문제가 뭐야?")
 
     assert response.classified_action == "ask"
-    assert "Critical Issue" in response.message
+    assert "Critical Issue" not in response.message
+    assert "검증 로그" in response.message
     assert response.snapshot.events[1].actor == "Player"
     assert response.snapshot.events[1].message == "QA에게 배포전문제가 뭐야?"
 
@@ -96,7 +97,7 @@ def test_engine_uses_semantic_intent_provider_before_game_action() -> None:
     assert response.classified_action == "ask"
     assert response.intent_provider == "cli"
     assert response.intent_confidence == 0.99
-    assert "Critical Issue" in response.message
+    assert "Critical Issue" not in response.message
 
 
 def test_target_hint_guides_semantic_question_without_changing_player_text() -> None:
@@ -111,7 +112,7 @@ def test_target_hint_guides_semantic_question_without_changing_player_text() -> 
 
     assert response.classified_action == "ask"
     assert response.snapshot.events[1].message == "배포전에 무슨 문제가 있던거죠?"
-    assert "Critical Issue" in response.message
+    assert "Critical Issue" not in response.message
 
 
 def test_request_evidence_reveals_requested_warning() -> None:

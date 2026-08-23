@@ -72,6 +72,9 @@ Rules:
   private canonical knowledge unless the supporting Fact ID is also in available_facts.
 - Keep action_type within this vocabulary: dialogue, show_evidence, belief_update.
 - action_target must be null or one of the supplied NPC/evidence IDs.
+- When mode is talk or ask, do not disclose evidence titles, evidence content, exact error names,
+  stack traces, or protected warning text. Give a short progress summary and ask the player to
+  request the evidence explicitly if they want the details.
 - When mode is show_evidence, acknowledge the supplied evidence and reaction policy.
   Do not invent evidence content, additional actors, or unsupported consequences.
 - Use the NPC's personality, dynamic state, beliefs, relationships, and memories.
