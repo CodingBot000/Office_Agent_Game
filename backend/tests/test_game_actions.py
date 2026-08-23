@@ -154,12 +154,36 @@ def test_throw_held_object_breaks_item_and_fells_target_npc() -> None:
     assert keyboard.condition == "destroyed"
     assert thrown.snapshot.player_inventory.held_object_ids == []
     assert frontend.is_fallen is True
+    assert frontend.physical_state == "comatose"
     assert frontend.id in thrown.snapshot.dialogue_refused_npc_ids
     assert frontend.dynamic_state.emotion == "afraid"
     assert backend.dynamic_state.emotion == "angry"
     assert thrown.snapshot.incident_status == "SECURITY_ESCALATED"
     assert thrown.snapshot.game_action_traces[-1].family == "throw_held_object"
     assert thrown.snapshot.game_action_traces[-1].target_id == "frontend_01"
+    assert all(
+        any("혼수상태" in memory.summary for memory in (*npc.recent_memories, *npc.important_memories))
+        for npc in thrown.snapshot.npcs
+    )
+
+
+def test_comatose_npc_refuses_dialogue_but_keeps_item_actions() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+    move(engine, started.session_id, "dev_area")
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="pick_up_backend_keyboard"))
+    engine.submit_game_action(started.session_id, GameActionRequest(action_id="throw_backend_keyboard_at_qa_01"))
+
+    move(engine, started.session_id, "qa_desk")
+    qa_snapshot = engine.snapshot(engine.get_session(started.session_id))
+    qa_action_ids = action_ids(qa_snapshot)
+    assert "inspect_qa_warning_printout" in qa_action_ids
+    assert "pick_up_qa_keyboard" in qa_action_ids
+    assert "throw_backend_keyboard_at_qa_01" not in qa_action_ids
+
+    response = engine.submit_action(started.session_id, "QA에게 질문한다.", target_hint="qa_01")
+    assert response.blocked is False
+    assert response.message == "QA Engineer은(는) 혼수상태로 답변할 수 없습니다."
 
 
 def test_natural_language_game_action_is_blocked_without_progress() -> None:

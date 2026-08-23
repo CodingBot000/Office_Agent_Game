@@ -82,7 +82,7 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 6
+CURRENT_SESSION_SCHEMA_VERSION = 7
 GAME_ACTION_ALERT = "Use the provided action buttons to perform game actions."
 
 
@@ -356,7 +356,7 @@ class GameEngine:
         elif action.family == "throw_held_object":
             target_id = action.target_id
             target = session.npcs.get(target_id or "")
-            if target is None or target.is_fallen:
+            if target is None or target.physical_state == "comatose":
                 return self._record_blocked_game_action(session, action, "Target NPC cannot be hit in the current state.")
 
             self._apply_throw_policy(session, world_object, target_id)
@@ -369,8 +369,9 @@ class GameEngine:
                 }
             )
             session.world_objects[world_object.id] = world_object
+            target.physical_state = "comatose"
             target.is_fallen = True
-            session.dialogue_refused_npc_ids.add(target.id)
+            self._record_comatose_awareness(session, target, world_object)
             message = f"{world_object.name}을(를) {target.name}에게 던졌습니다. 물건이 파손됐고 {target.name}가 쓰러졌습니다."
             self._append_event(session, "Player", message, "game_action", target.id)
         else:
@@ -499,6 +500,27 @@ class GameEngine:
                 witness_location=impact_location,
             )
 
+    def _record_comatose_awareness(
+        self,
+        session: GameSession,
+        target: NPCState,
+        world_object: WorldObjectState,
+    ) -> None:
+        summary = f"{target.name}이(가) Player가 던진 {world_object.name}에 맞아 혼수상태에 빠졌다."
+        for npc in session.npcs.values():
+            duplicate = any(
+                memory.summary.casefold() == summary.casefold()
+                for memory in (*npc.recent_memories, *npc.important_memories)
+            )
+            if duplicate:
+                continue
+
+            memory = Memory(summary=summary, importance=0.9, turn=session.turn)
+            npc.recent_memories.append(memory)
+            npc.important_memories.append(memory)
+            npc.recent_memories = npc.recent_memories[-8:]
+            npc.important_memories = npc.important_memories[-8:]
+
     def _record_blocked_game_action(
         self,
         session: GameSession,
@@ -615,7 +637,8 @@ class GameEngine:
         for npc_id, raw_npc in npc_payload.items():
             if not isinstance(raw_npc, dict):
                 continue
-            raw_npc.setdefault("is_fallen", False)
+            raw_npc.setdefault("physical_state", "comatose" if raw_npc.get("is_fallen", False) else "normal")
+            raw_npc.setdefault("is_fallen", raw_npc.get("physical_state") == "comatose")
             known_fact_ids = [str(item) for item in raw_npc.get("known_fact_ids", [])]
             if not known_fact_ids:
                 for legacy_fact in raw_npc.get("known_facts", []):
@@ -1426,6 +1449,8 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "대화할 NPC를 찾지 못했습니다.", "guardrail")
             return "대화할 NPC를 찾지 못했습니다."
+        if npc.physical_state == "comatose":
+            return self._record_comatose_response(session, npc)
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "talk", player_input)
@@ -1445,6 +1470,8 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "질문할 NPC를 찾지 못했습니다.", "guardrail")
             return "질문할 NPC를 찾지 못했습니다."
+        if npc.physical_state == "comatose":
+            return self._record_comatose_response(session, npc)
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "ask", player_input)
@@ -1464,6 +1491,8 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "책임을 물을 NPC를 찾지 못했습니다.", "guardrail")
             return "책임을 물을 NPC를 찾지 못했습니다."
+        if npc.physical_state == "comatose":
+            return self._record_comatose_response(session, npc)
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "accuse", player_input)
@@ -1486,6 +1515,8 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "옹호할 NPC를 찾지 못했습니다.", "guardrail")
             return "옹호할 NPC를 찾지 못했습니다."
+        if npc.physical_state == "comatose":
+            return self._record_comatose_response(session, npc)
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
         decision, provider_fallback = self._request_decision(session, npc, "defend", player_input)
@@ -1501,6 +1532,11 @@ class GameEngine:
 
     def _record_dialogue_refusal(self, session: GameSession, npc: NPCState) -> str:
         message = "심각한 갈등 사건이 해결되지 않아 현재 정상적인 대화를 거부합니다. 사과, 피해 복구, 중재가 필요합니다."
+        self._append_event(session, npc.name, message, "policy", npc.id)
+        return message
+
+    def _record_comatose_response(self, session: GameSession, npc: NPCState) -> str:
+        message = f"{npc.name}은(는) 혼수상태로 답변할 수 없습니다."
         self._append_event(session, npc.name, message, "policy", npc.id)
         return message
 

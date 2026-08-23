@@ -178,7 +178,6 @@ export function VisualOffice({
   );
   const nearestNpc = useMemo(() => {
     const candidates = snapshot.npcs
-      .filter((npc) => !npc.is_fallen)
       .map((npc) => {
         const layout = npcWorldLayout[npc.id];
         if (!layout) return null;
@@ -413,16 +412,16 @@ export function VisualOffice({
                 const isNearby = npc.id === nearestNpc?.npc.id;
                 return (
                   <button
-                    className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""} ${npc.is_fallen ? "fallen" : ""}`}
+                    className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""} ${npc.physical_state === "comatose" ? "fallen" : ""} ${isFearOrShock(npc.dynamic_state.emotion) ? "shaking" : ""}`}
                     key={npc.id}
                     type="button"
                     style={worldPointStyle(layout.point, 2.1)}
                     onClick={() => selectNpc(npc.id)}
                     aria-label={`${npc.name} 선택`}
-                    disabled={npc.is_fallen}
+                    disabled={false}
                   >
-                    <CharacterSprite asset={layout.asset} direction={npc.is_fallen ? "front" : "back"} />
-                    <span className="world-character-label">{npc.name}{npc.is_fallen ? " · DOWN" : ""}</span>
+                    <CharacterSprite asset={layout.asset} direction={npc.physical_state === "comatose" ? "front" : "back"} className={isFearOrShock(npc.dynamic_state.emotion) ? "fear-shake" : ""} />
+                    <span className="world-character-label">{npc.name}{npc.physical_state === "comatose" ? " · COMATOSE" : ""}</span>
                     <span className={`world-emotion-dot ${npc.dynamic_state.emotion}`} />
                   </button>
                 );
@@ -484,7 +483,7 @@ export function VisualOffice({
                       <button className="player-action-back" type="button" onClick={() => setSelectedThrowObjectId(null)}>← 물건 다시 선택</button>
                       {selectedThrowActions.map((action) => {
                         const target = snapshot.npcs.find((npc) => npc.id === action.target_id);
-                        if (!target || target.is_fallen) return null;
+                        if (!target || target.physical_state === "comatose") return null;
                         return <button key={action.id} type="button" onClick={() => void executeVisualAction(action)} disabled={submitting}>{target.name} · {target.role}</button>;
                       })}
                     </div>
@@ -546,9 +545,9 @@ export function VisualOffice({
             <div className="visual-panel-heading"><span>TEAM MEMBERS</span><span className="panel-count">{snapshot.npcs.length} ACTIVE</span></div>
             <div className="visual-team-list">
               {snapshot.npcs.map((npc) => (
-                <button className={`${npc.id === selectedNpcId ? "selected" : ""} ${npc.is_fallen ? "fallen" : ""}`} type="button" key={npc.id} onClick={() => selectNpc(npc.id)} disabled={npc.is_fallen}>
-                  <span className="team-avatar"><CharacterSprite asset={npcWorldLayout[npc.id]?.asset ?? ""} direction="back" /></span>
-                  <span><strong>{npc.name}</strong><small>{npc.is_fallen ? "쓰러짐" : npc.role}</small></span>
+                <button className={`${npc.id === selectedNpcId ? "selected" : ""} ${npc.physical_state === "comatose" ? "fallen" : ""}`} type="button" key={npc.id} onClick={() => selectNpc(npc.id)}>
+                  <span className="team-avatar"><CharacterSprite asset={npcWorldLayout[npc.id]?.asset ?? ""} direction="back" className={isFearOrShock(npc.dynamic_state.emotion) ? "fear-shake" : ""} /></span>
+                  <span><strong>{npc.name}</strong><small>{npc.physical_state === "comatose" ? "혼수상태" : npc.role}</small></span>
                   <i className={`team-presence ${npc.dynamic_state.emotion}`} />
                 </button>
               ))}
@@ -557,17 +556,17 @@ export function VisualOffice({
 
           {selectedNpc && (
             <section className="visual-panel selected-panel">
-              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{selectedNpc.is_fallen ? "DOWN" : selectedNpc.dynamic_state.emotion}</span></div>
-              <div className="visual-selected-person"><CharacterSprite asset={npcWorldLayout[selectedNpc.id]?.asset ?? ""} direction="back" /><div><strong>{selectedNpc.name}</strong><small>{selectedNpc.role}</small></div></div>
+              <div className="visual-panel-heading"><span>SELECTED NPC</span><span className="selected-state">{selectedNpc.physical_state === "comatose" ? "COMATOSE" : selectedNpc.dynamic_state.emotion}</span></div>
+              <div className="visual-selected-person"><CharacterSprite asset={npcWorldLayout[selectedNpc.id]?.asset ?? ""} direction="back" className={isFearOrShock(selectedNpc.dynamic_state.emotion) ? "fear-shake" : ""} /><div><strong>{selectedNpc.name}</strong><small>{selectedNpc.role}</small></div></div>
               <div className="visual-metrics">
                 <MetricBar label="STRESS" value={selectedNpc.dynamic_state.stress} tone="amber" />
                 <MetricBar label="TRUST" value={Math.max(0, selectedNpc.dynamic_state.trust_toward_player)} tone="cyan" />
                 <MetricBar label="COOPERATION" value={selectedNpc.dynamic_state.cooperation} tone="green" />
               </div>
-              {!selectedNpc.is_fallen && nearestNpc?.npc.id === selectedNpc.id ? (
+              {nearestNpc?.npc.id === selectedNpc.id ? (
                 <button className="visual-interact-button" type="button" onClick={() => setInteractionOpen(true)} disabled={submitting || snapshot.completed}>E · INTERACT</button>
               ) : (
-                <p className="visual-distance-note">{selectedNpc.is_fallen ? "쓰러진 NPC와는 상호작용할 수 없습니다." : "NPC에게 가까이 가면 상호작용할 수 있습니다."}</p>
+                <p className="visual-distance-note">{selectedNpc.physical_state === "comatose" ? "혼수상태로 대화할 수 없지만 물건과 액션은 상호작용할 수 있습니다." : "NPC에게 가까이 가면 상호작용할 수 있습니다."}</p>
               )}
             </section>
           )}
@@ -594,6 +593,10 @@ export function VisualOffice({
 
 function CharacterSprite({ asset, direction, className = "" }: { asset: string; direction: SpriteDirection; className?: string }) {
   return <span className={`character-sprite ${className}`} style={{ backgroundImage: `url(${asset})`, backgroundPosition: directionBackgroundPositions[direction] }} aria-hidden="true" />;
+}
+
+function isFearOrShock(emotion: string): boolean {
+  return emotion === "afraid" || emotion === "shocked";
 }
 
 function MapAsset({ src, alt, className, style }: { src: string; alt: string; className: string; style: React.CSSProperties }) {

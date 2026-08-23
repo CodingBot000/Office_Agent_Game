@@ -114,6 +114,7 @@ export interface NPCState {
   role: string;
   personality: Personality;
   dynamic_state: DynamicState;
+  physical_state: "normal" | "comatose";
   is_fallen: boolean;
   known_fact_ids: string[];
   known_facts: string[];

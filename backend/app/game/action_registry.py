@@ -50,7 +50,7 @@ def build_available_game_actions(session: GameSession) -> list[AvailableGameActi
 
             for npc_id in sorted(session.npcs):
                 npc = session.npcs[npc_id]
-                if npc.is_fallen:
+                if npc.physical_state == "comatose":
                     continue
                 actions.append(
                     AvailableGameAction(

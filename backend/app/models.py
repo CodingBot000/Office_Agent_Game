@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 ActionType = Literal[
@@ -69,6 +69,7 @@ GameActionFamily = Literal[
     "throw_held_object",
 ]
 ActionScope = Literal["target", "held_item", "world"]
+NpcPhysicalState = Literal["normal", "comatose"]
 
 
 class FactDefinition(BaseModel):
@@ -264,6 +265,8 @@ class NPCState(BaseModel):
     role: str
     personality: Personality
     dynamic_state: DynamicState
+    physical_state: NpcPhysicalState = "normal"
+    # Legacy compatibility for existing Unity/Web clients. Keep synchronized with physical_state.
     is_fallen: bool = False
     known_fact_ids: list[str] = Field(default_factory=list)
     known_facts: list[str] = Field(default_factory=list)
@@ -271,6 +274,16 @@ class NPCState(BaseModel):
     relationships: list[Relationship] = Field(default_factory=list)
     recent_memories: list[Memory] = Field(default_factory=list)
     important_memories: list[Memory] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def synchronize_legacy_physical_state(self) -> "NPCState":
+        if self.physical_state == "comatose" or self.is_fallen:
+            self.physical_state = "comatose"
+            self.is_fallen = True
+        else:
+            self.physical_state = "normal"
+            self.is_fallen = False
+        return self
 
 
 class Evidence(BaseModel):

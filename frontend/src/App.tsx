@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
 import { ModeChooser, VisualOffice } from "./VisualOffice";
@@ -63,6 +63,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [actionAlert, setActionAlert] = useState<string | null>(null);
   const visualLocationRequest = useRef<string | null>(null);
+  const eventLogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     startSession()
@@ -70,6 +71,12 @@ function App() {
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Backend 연결에 실패했습니다."))
       .finally(() => setLoading(false));
   }, []);
+
+  useLayoutEffect(() => {
+    const eventLog = eventLogRef.current;
+    if (eventLog == null) return;
+    eventLog.scrollTop = eventLog.scrollHeight;
+  }, [snapshot?.events.length, pendingCommand?.status, pendingCommand?.text]);
 
   const selectedNpc = useMemo<NPCState | null>(
     () => snapshot?.npcs.find((npc) => npc.id === selectedNpcId) ?? snapshot?.npcs[0] ?? null,
@@ -406,7 +413,7 @@ function App() {
             <span className="event-count">{snapshot.events.length} EVENTS</span>
           </div>
 
-          <div className="event-log" aria-live="polite">
+          <div className="event-log" ref={eventLogRef} aria-live="polite">
             {snapshot.events.map((entry) => (
               <article className={`event-entry ${entry.event_type}`} key={entry.id}>
                 <div className="event-meta">
@@ -528,6 +535,7 @@ function App() {
               </div>
 
               <div className="state-grid">
+                <Metric label="PHYSICAL STATE" value={selectedNpc.physical_state === "comatose" ? "COMATOSE" : "NORMAL"} />
                 <Metric label="EMOTION" value={selectedNpc.dynamic_state.emotion} />
                 <Metric label="STRESS" value={`${selectedNpc.dynamic_state.stress}%`} />
                 <Metric label="TRUST" value={`${selectedRelationship?.trust ?? selectedNpc.dynamic_state.trust_toward_player}`} />

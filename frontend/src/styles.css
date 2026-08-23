@@ -405,6 +405,8 @@ h1, h2, p { margin: 0; }
 .world-character-button.nearby::after { content: ""; position: absolute; inset: 0; border: 1px dashed var(--amber); border-radius: 50%; opacity: .8; animation: nearby-pulse 1.3s ease-in-out infinite; }
 @keyframes nearby-pulse { 50% { transform: scale(1.08); opacity: .3; } }
 .character-sprite { position: absolute; inset: 0; display: block; background-repeat: no-repeat; background-size: 400% 100%; image-rendering: pixelated; }
+.character-sprite.fear-shake { animation: npc-fear-shake .12s steps(2, end) infinite; }
+@keyframes npc-fear-shake { 0%, 100% { margin-left: -2px; } 50% { margin-left: 2px; } }
 .world-character-label { position: absolute; bottom: 96%; left: 50%; min-width: 130px; transform: translateX(-50%); color: rgba(255,255,255,.92); font: 500 9px var(--mono); text-align: center; text-shadow: 1px 1px 2px #111; white-space: nowrap; pointer-events: none; }
 .world-emotion-dot { position: absolute; right: 8%; top: 17%; width: 7px; height: 7px; border: 1px solid rgba(20,20,20,.65); border-radius: 50%; background: var(--amber); }
 .world-emotion-dot.worried, .world-emotion-dot.uneasy, .world-emotion-dot.urgent, .world-emotion-dot.guarded, .world-emotion-dot.tense { background: var(--amber); }
