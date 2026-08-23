@@ -11,6 +11,7 @@ type WorldPoint = {
 };
 
 type SpriteDirection = "front" | "back" | "left" | "right";
+type RunDirection = "left" | "right";
 
 type VisualOfficeProps = {
   snapshot: GameSnapshot;
@@ -81,11 +82,11 @@ const collisionRects = [
   { x: 0, y: -6.1, width: 20.5, height: 0.35 },
   { x: -10.1, y: 0, width: 0.35, height: 12 },
   { x: 10.1, y: 0, width: 0.35, height: 12 },
-  { x: -6, y: 2.5, width: 4.5, height: 1.5 },
-  { x: -6, y: -0.1, width: 4.5, height: 1.5 },
-  { x: -6, y: -2.7, width: 4.5, height: 1.5 },
-  { x: 5, y: 3.25, width: 4.5, height: 1.5 },
-  { x: 5, y: -3.25, width: 4.5, height: 1.5 },
+  { x: -6, y: 2.5, width: 3.9, height: 0.75 },
+  { x: -6, y: -0.1, width: 3.9, height: 0.75 },
+  { x: -6, y: -2.7, width: 3.9, height: 0.75 },
+  { x: 5, y: 3.25, width: 3.9, height: 0.75 },
+  { x: 5, y: -3.25, width: 3.9, height: 0.75 },
   { x: -9.25, y: 0, width: 0.7, height: 2 },
   { x: -1.7, y: 4.75, width: 0.85, height: 1.35 },
   { x: 8.7, y: 0.2, width: 0.7, height: 0.75 },
@@ -371,7 +372,7 @@ export function VisualOffice({
       if (!current || current.targetId !== targetId) return;
       current.impactReady = true;
       triggerThrowImpact(targetId);
-    }, 680)];
+    }, 1360)];
   };
 
   const completeThrowAction = () => {
@@ -534,11 +535,6 @@ export function VisualOffice({
 
               <div className="world-player" style={worldPointStyle(playerPosition, 2.35)}>
                 <CharacterSprite asset={`${OFFICE_ASSET_BASE}/characters/player.png`} direction={playerDirection} />
-                <div className="held-world-items" aria-label="플레이어 소지품">
-                  {heldObjects.map((worldObject, index) => (
-                    <HeldWorldItem key={worldObject.id} object={worldObject} index={index} />
-                  ))}
-                </div>
                 <span className="world-character-label">PLAYER</span>
               </div>
 
@@ -578,24 +574,28 @@ export function VisualOffice({
                 const target = npcWorldLayout[throwAnimation.targetId]?.point;
                 if (!target) return null;
                 const targetStyle = worldPointStyle(target, 1.2) as React.CSSProperties & Record<string, string>;
+                const isPersonThrow = isPersonObjectId(throwAnimation.objectId);
+                const throwDirection: RunDirection = target.x >= playerPosition.x ? "right" : "left";
+                const throwWidth = isPersonThrow ? 2.1 : 1.25;
+                const impactWidth = isPersonThrow ? 2.1 : 1.5;
                 return throwAnimation.phase === "flying" ? (
                   <div
-                    className="thrown-world-object"
+                    className={`thrown-world-object${isPersonThrow ? " thrown-person-object" : ""}`}
                     style={{
-                      ...worldPointStyle(playerPosition, 1.25),
+                      ...worldPointStyle(playerPosition, throwWidth),
                       "--throw-target-left": targetStyle.left,
                       "--throw-target-bottom": targetStyle.bottom,
                     } as React.CSSProperties}
                   >
-                    <WorldObjectVisual objectId={throwAnimation.objectId} />
+                    <WorldObjectVisual objectId={throwAnimation.objectId} runDirection={isPersonThrow ? throwDirection : undefined} />
                   </div>
                 ) : (
                   throwAnimation.impact === "blink" ? (
-                    <div className="world-blink-effect" style={worldPointStyle(target, 1.5)} aria-label="긍정 아이템 점멸 효과">
+                    <div className="world-blink-effect" style={worldPointStyle(target, impactWidth)} aria-label="긍정 아이템 점멸 효과">
                       <WorldObjectVisual objectId={throwAnimation.objectId} />
                     </div>
                   ) : (
-                    <div className="world-break-effect" style={worldPointStyle(target, 1.5)} aria-label="투척물 파손 효과">
+                    <div className="world-break-effect" style={worldPointStyle(target, impactWidth)} aria-label="투척물 파손 효과">
                       <WorldObjectVisual objectId={throwAnimation.objectId} className="break-half break-left" />
                       <WorldObjectVisual objectId={throwAnimation.objectId} className="break-half break-right" />
                     </div>
@@ -690,20 +690,17 @@ function CharacterSprite({ asset, direction, className = "" }: { asset: string; 
   return <span className={`character-sprite ${className}`} style={{ backgroundImage: `url(${asset})`, backgroundPosition: directionBackgroundPositions[direction] }} aria-hidden="true" />;
 }
 
-function HeldWorldItem({ object, index }: { object: GameSnapshot["world_objects"][number]; index: number }) {
-  const style = { right: `${10 + index * 18}%`, top: `${46 - index * 5}%` };
-  if (isPersonObjectId(object.id)) {
+function WorldObjectVisual({ objectId, className = "", runDirection }: { objectId: string; className?: string; runDirection?: RunDirection }) {
+  if (isPersonObjectId(objectId) && runDirection) {
     return (
-      <span className="held-world-item held-world-person" style={style} aria-label={`${object.name} 소지 중`}>
-        <img src={getWorldObjectAsset(object.id)} alt={`${object.name} 소지 중`} draggable={false} />
-      </span>
+      <span
+        className={"running-person-sprite " + className}
+        style={{ backgroundImage: "url(" + getWorldObjectRunAsset(objectId, runDirection) + ")" }}
+        aria-hidden="true"
+      />
     );
   }
 
-  return <img className="held-world-item" style={style} src={getWorldObjectAsset(object.id)} alt={`${object.name} 소지 중`} />;
-}
-
-function WorldObjectVisual({ objectId, className = "" }: { objectId: string; className?: string }) {
   if (isPersonObjectId(objectId)) {
     return <img className={`world-object-person ${className}`} src={getWorldObjectAsset(objectId)} alt="" draggable={false} />;
   }
@@ -726,6 +723,10 @@ function getWorldObjectAsset(objectId: string): string {
     default:
       return `${OFFICE_ASSET_BASE}/keyboard.png`;
   }
+}
+
+function getWorldObjectRunAsset(objectId: string, direction: RunDirection): string {
+  return OFFICE_ASSET_BASE + "/items/" + objectId + "_run_" + direction + ".png";
 }
 
 function isPersonObjectId(objectId: string): boolean {
