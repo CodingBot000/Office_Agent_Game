@@ -169,6 +169,8 @@ export function VisualOffice({
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const [throwAnimation, setThrowAnimation] = useState<ThrowAnimation | null>(null);
   const keysRef = useRef<Set<string>>(new Set());
+  const nearestNpcRef = useRef<typeof nearestNpc>(null);
+  const completedRef = useRef(snapshot.completed);
   const lastLocationRef = useRef(getLocationForPoint(initialPosition));
   const throwTimersRef = useRef<number[]>([]);
 
@@ -188,6 +190,8 @@ export function VisualOffice({
       .sort((a, b) => a.distance - b.distance)[0];
     return candidates && candidates.distance <= INTERACTION_DISTANCE ? candidates : null;
   }, [playerPosition, snapshot.npcs]);
+  nearestNpcRef.current = nearestNpc;
+  completedRef.current = snapshot.completed;
   const currentLocation = getLocationForPoint(playerPosition);
   const heldObject = snapshot.world_objects.find((worldObject) => worldObject.holder_id === "player" && worldObject.condition !== "destroyed");
   const nearbyActions = useMemo(() => {
@@ -221,31 +225,40 @@ export function VisualOffice({
 
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-      const movementKey = ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key);
+      const movementKey = getMovementKey(event);
       if (movementKey) {
         event.preventDefault();
-        keysRef.current.add(key);
+        keysRef.current.add(movementKey);
       }
-      if (key === "e" && nearestNpc && !snapshot.completed) {
+      const key = event.key.toLowerCase();
+      const nearbyNpc = nearestNpcRef.current;
+      if (key === "e" && nearbyNpc && !completedRef.current) {
         event.preventDefault();
-        onSelectNpc(nearestNpc.npc.id);
+        onSelectNpc(nearbyNpc.npc.id);
         setInteractionOpen(true);
       }
-      if (key === "i" && !snapshot.completed) {
+      if (key === "i" && !completedRef.current) {
         event.preventDefault();
         setInventoryOpen((open) => !open);
       }
     };
-    const up = (event: KeyboardEvent) => keysRef.current.delete(event.key.toLowerCase());
+    const up = (event: KeyboardEvent) => {
+      const movementKey = getMovementKey(event);
+      if (movementKey) keysRef.current.delete(movementKey);
+    };
+    const clearKeys = () => keysRef.current.clear();
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+    window.addEventListener("blur", clearKeys);
+    document.addEventListener("visibilitychange", clearKeys);
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
-      keysRef.current.clear();
+      window.removeEventListener("blur", clearKeys);
+      document.removeEventListener("visibilitychange", clearKeys);
+      clearKeys();
     };
-  }, [nearestNpc, onSelectNpc, snapshot.completed]);
+  }, [onSelectNpc]);
 
   useEffect(() => {
     if (snapshot.completed) return;
@@ -597,6 +610,20 @@ function CharacterSprite({ asset, direction, className = "" }: { asset: string; 
 
 function isFearOrShock(emotion: string): boolean {
   return emotion === "afraid" || emotion === "shocked";
+}
+
+function getMovementKey(event: KeyboardEvent): string | null {
+  switch (event.code) {
+    case "KeyW": return "w";
+    case "KeyA": return "a";
+    case "KeyS": return "s";
+    case "KeyD": return "d";
+    case "ArrowUp": return "arrowup";
+    case "ArrowDown": return "arrowdown";
+    case "ArrowLeft": return "arrowleft";
+    case "ArrowRight": return "arrowright";
+    default: return null;
+  }
 }
 
 function MapAsset({ src, alt, className, style }: { src: string; alt: string; className: string; style: React.CSSProperties }) {
