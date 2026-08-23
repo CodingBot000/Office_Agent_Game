@@ -28,11 +28,15 @@ type VisualOfficeProps = {
 
 type ThrowAnimation = {
   targetId: string;
+  objectId: string;
+  impact: "split" | "blink";
   phase: "flying" | "impact";
 };
 
 type ThrowPresentation = {
   targetId: string;
+  objectId: string;
+  impact: "split" | "blink";
   actionSucceeded: boolean;
   impactReady: boolean;
 };
@@ -201,7 +205,12 @@ export function VisualOffice({
   nearestNpcRef.current = nearestNpc;
   completedRef.current = snapshot.completed;
   const currentLocation = getLocationForPoint(playerPosition);
-  const heldObject = snapshot.world_objects.find((worldObject) => worldObject.holder_id === "player" && worldObject.condition !== "destroyed");
+  const heldObjects = useMemo(
+    () => snapshot.player_inventory.held_object_ids
+      .map((objectId) => snapshot.world_objects.find((worldObject) => worldObject.id === objectId))
+      .filter((worldObject): worldObject is GameSnapshot["world_objects"][number] => Boolean(worldObject && worldObject.condition !== "destroyed")),
+    [snapshot.player_inventory.held_object_ids, snapshot.world_objects],
+  );
   const nearbyActions = useMemo(() => {
     if (!nearestNpc) return [];
     return snapshot.available_game_actions.filter((action) => action.scope === "held_item" || action.target_id === nearestNpc.npc.id);
@@ -336,8 +345,8 @@ export function VisualOffice({
     setPlayerActionOpen(false);
     setSelectedThrowObjectId(null);
     const isThrowAction = action.family === "throw_held_object" && action.object_id && action.target_id;
-    if (isThrowAction && action.target_id) {
-      startThrowAnimation(action.target_id);
+    if (isThrowAction && action.target_id && action.object_id) {
+      startThrowAnimation(action);
     }
     const succeeded = await onAction(action);
     if (isThrowAction) {
@@ -349,10 +358,14 @@ export function VisualOffice({
     }
   };
 
-  const startThrowAnimation = (targetId: string) => {
+  const startThrowAnimation = (action: AvailableGameAction) => {
+    if (!action.target_id || !action.object_id) return;
+    const object = snapshot.world_objects.find((worldObject) => worldObject.id === action.object_id);
+    const impact = object?.throw_impact ?? (object?.throw_effect === "support" ? "blink" : "split");
+    const targetId = action.target_id;
     cancelThrowAnimation();
-    throwPresentationRef.current = { targetId, actionSucceeded: false, impactReady: false };
-    setThrowAnimation({ targetId, phase: "flying" });
+    throwPresentationRef.current = { targetId, objectId: action.object_id, impact, actionSucceeded: false, impactReady: false };
+    setThrowAnimation({ targetId, objectId: action.object_id, impact, phase: "flying" });
     throwTimersRef.current = [window.setTimeout(() => {
       const current = throwPresentationRef.current;
       if (!current || current.targetId !== targetId) return;
@@ -371,7 +384,7 @@ export function VisualOffice({
   const triggerThrowImpact = (targetId: string) => {
     const current = throwPresentationRef.current;
     if (!current || current.targetId !== targetId || !current.actionSucceeded || !current.impactReady) return;
-    setThrowAnimation({ targetId, phase: "impact" });
+    setThrowAnimation({ targetId, objectId: current.objectId, impact: current.impact, phase: "impact" });
     throwTimersRef.current.push(window.setTimeout(() => {
       if (throwPresentationRef.current?.targetId !== targetId) return;
       throwPresentationRef.current = null;
@@ -459,7 +472,11 @@ export function VisualOffice({
 
               {droppedObjects.map((worldObject) => {
                 const point = droppedObjectPoints[worldObject.location] ?? droppedObjectPoints.meeting_room;
-                return <MapAsset key={`dropped-${worldObject.id}`} src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt={`${worldObject.name} 바닥에 놓임`} className="dropped-world-object" style={centeredWorldStyle(point.x, point.y, 1.25, 0.46)} />;
+                return (
+                  <div key={`dropped-${worldObject.id}`} className={`dropped-world-object ${isPersonObjectId(worldObject.id) ? "dropped-person-object" : ""}`} style={centeredWorldStyle(point.x, point.y, 1.25, 0.46)} aria-label={`${worldObject.name} 바닥에 놓임`}>
+                    <WorldObjectVisual objectId={worldObject.id} />
+                  </div>
+                );
               })}
 
               <MapAsset src={`${OFFICE_ASSET_BASE}/server_rack.png`} alt="server rack" className="map-decoration" style={centeredWorldStyle(-9.25, 0, 0.7, 2)} />
@@ -517,7 +534,11 @@ export function VisualOffice({
 
               <div className="world-player" style={worldPointStyle(playerPosition, 2.35)}>
                 <CharacterSprite asset={`${OFFICE_ASSET_BASE}/characters/player.png`} direction={playerDirection} />
-                {heldObject && <img className="held-world-object" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="손에 든 키보드" />}
+                <div className="held-world-items" aria-label="플레이어 소지품">
+                  {heldObjects.map((worldObject, index) => (
+                    <HeldWorldItem key={worldObject.id} object={worldObject} index={index} />
+                  ))}
+                </div>
                 <span className="world-character-label">PLAYER</span>
               </div>
 
@@ -558,21 +579,27 @@ export function VisualOffice({
                 if (!target) return null;
                 const targetStyle = worldPointStyle(target, 1.2) as React.CSSProperties & Record<string, string>;
                 return throwAnimation.phase === "flying" ? (
-                  <img
+                  <div
                     className="thrown-world-object"
-                    src={`${OFFICE_ASSET_BASE}/keyboard.png`}
-                    alt="날아가는 키보드"
                     style={{
                       ...worldPointStyle(playerPosition, 1.25),
                       "--throw-target-left": targetStyle.left,
                       "--throw-target-bottom": targetStyle.bottom,
                     } as React.CSSProperties}
-                  />
-                ) : (
-                  <div className="world-break-effect" style={worldPointStyle(target, 1.5)} aria-label="키보드 파손 효과">
-                    <img className="break-half break-left" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="" />
-                    <img className="break-half break-right" src={`${OFFICE_ASSET_BASE}/keyboard.png`} alt="" />
+                  >
+                    <WorldObjectVisual objectId={throwAnimation.objectId} />
                   </div>
+                ) : (
+                  throwAnimation.impact === "blink" ? (
+                    <div className="world-blink-effect" style={worldPointStyle(target, 1.5)} aria-label="긍정 아이템 점멸 효과">
+                      <WorldObjectVisual objectId={throwAnimation.objectId} />
+                    </div>
+                  ) : (
+                    <div className="world-break-effect" style={worldPointStyle(target, 1.5)} aria-label="투척물 파손 효과">
+                      <WorldObjectVisual objectId={throwAnimation.objectId} className="break-half break-left" />
+                      <WorldObjectVisual objectId={throwAnimation.objectId} className="break-half break-right" />
+                    </div>
+                  )
                 );
               })()}
 
@@ -637,8 +664,14 @@ export function VisualOffice({
             <button className="visual-panel-heading inventory-heading" type="button" onClick={() => setInventoryOpen((open) => !open)}><span>INVENTORY · I</span><span>{inventoryOpen ? "−" : "+"}</span></button>
             {inventoryOpen && (
               <div className="visual-inventory-content">
-                <span className="inventory-label">PLAYER HAND</span>
-                {heldObject ? <p className="inventory-held"><span className="inventory-held-name">{formatWorldObjectName(heldObject.name)}</span><small>{heldObject.condition}</small></p> : <p className="inventory-empty">Hands are empty.</p>}
+                <span className="inventory-label">PLAYER HAND · {snapshot.player_inventory.unlimited ? "UNLIMITED" : `${heldObjects.length}/${snapshot.player_inventory.max_held_objects}`}</span>
+                {heldObjects.length > 0 ? (
+                  <div className="inventory-held-list">
+                    {heldObjects.map((worldObject) => (
+                      <p className="inventory-held" key={worldObject.id}><span className="inventory-held-name">{formatWorldObjectName(worldObject.name)}</span><small>{worldObject.throw_effect === "support" ? "positive" : "negative"}</small></p>
+                    ))}
+                  </div>
+                ) : <p className="inventory-empty">Hands are empty.</p>}
                 <span className="inventory-label">EVIDENCE</span>
                 <p className="inventory-evidence-count">{snapshot.evidences.filter((evidence) => evidence.discovered).length} / {snapshot.evidences.length} discovered</p>
               </div>
@@ -655,6 +688,48 @@ export function VisualOffice({
 
 function CharacterSprite({ asset, direction, className = "" }: { asset: string; direction: SpriteDirection; className?: string }) {
   return <span className={`character-sprite ${className}`} style={{ backgroundImage: `url(${asset})`, backgroundPosition: directionBackgroundPositions[direction] }} aria-hidden="true" />;
+}
+
+function HeldWorldItem({ object, index }: { object: GameSnapshot["world_objects"][number]; index: number }) {
+  const style = { right: `${10 + index * 18}%`, top: `${46 - index * 5}%` };
+  if (isPersonObjectId(object.id)) {
+    return (
+      <span className="held-world-item held-world-person" style={style} aria-label={`${object.name} 소지 중`}>
+        <CharacterSprite asset={getWorldObjectAsset(object.id)} direction="front" />
+      </span>
+    );
+  }
+
+  return <img className="held-world-item" style={style} src={getWorldObjectAsset(object.id)} alt={`${object.name} 소지 중`} />;
+}
+
+function WorldObjectVisual({ objectId, className = "" }: { objectId: string; className?: string }) {
+  if (isPersonObjectId(objectId)) {
+    return <CharacterSprite asset={getWorldObjectAsset(objectId)} direction="front" className={`world-object-person ${className}`} />;
+  }
+
+  return <img className={className} src={getWorldObjectAsset(objectId)} alt="" draggable={false} />;
+}
+
+function getWorldObjectAsset(objectId: string): string {
+  switch (objectId) {
+    case "americano_coupon":
+    case "department_store_voucher":
+    case "luxury_handbag":
+      return `${OFFICE_ASSET_BASE}/items/${objectId}.png`;
+    case "representative_person":
+      return `${OFFICE_ASSET_BASE}/characters/backend.png`;
+    case "team_leader_person":
+      return `${OFFICE_ASSET_BASE}/characters/frontend.png`;
+    case "division_head_person":
+      return `${OFFICE_ASSET_BASE}/characters/pm.png`;
+    default:
+      return `${OFFICE_ASSET_BASE}/keyboard.png`;
+  }
+}
+
+function isPersonObjectId(objectId: string): boolean {
+  return ["representative_person", "team_leader_person", "division_head_person"].includes(objectId);
 }
 
 function isFearOrShock(emotion: string): boolean {

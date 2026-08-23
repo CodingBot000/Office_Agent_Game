@@ -67,6 +67,66 @@ WORLD_OBJECT_DEFINITIONS = [
     WorldObjectDefinition(id="qa_keyboard", name="QA keyboard", owner_id="qa_01", location="qa_desk"),
     WorldObjectDefinition(id="pm_keyboard", name="PM keyboard", owner_id="pm_01", location="pm_desk"),
     WorldObjectDefinition(
+        id="americano_coupon",
+        name="아메리카노 쿠폰",
+        owner_id="player",
+        location="meeting_room",
+        destructible=False,
+        throw_effect="support",
+        throw_severity=2,
+        throw_impact="blink",
+    ),
+    WorldObjectDefinition(
+        id="department_store_voucher",
+        name="백화점 상품권",
+        owner_id="player",
+        location="meeting_room",
+        destructible=False,
+        throw_effect="support",
+        throw_severity=3,
+        throw_impact="blink",
+    ),
+    WorldObjectDefinition(
+        id="luxury_handbag",
+        name="명품 가방",
+        owner_id="player",
+        location="meeting_room",
+        destructible=False,
+        throw_effect="support",
+        throw_severity=3,
+        throw_impact="blink",
+    ),
+    WorldObjectDefinition(
+        id="representative_person",
+        name="대표님",
+        owner_id="player",
+        location="meeting_room",
+        destructible=False,
+        throw_effect="physical_assault",
+        throw_severity=5,
+        throw_impact="split",
+    ),
+    WorldObjectDefinition(
+        id="team_leader_person",
+        name="팀장님",
+        owner_id="player",
+        location="meeting_room",
+        destructible=False,
+        throw_effect="physical_assault",
+        throw_severity=5,
+        throw_impact="split",
+    ),
+    WorldObjectDefinition(
+        id="division_head_person",
+        name="본부장님",
+        owner_id="player",
+        location="meeting_room",
+        destructible=False,
+        throw_effect="physical_assault",
+        throw_severity=5,
+        throw_impact="split",
+    ),
+    WorldObjectDefinition(
         id="meeting_room_monitor",
         name="Meeting room monitor",
         location="meeting_room",
@@ -87,6 +147,15 @@ WORLD_OBJECT_DEFINITIONS = [
         evidence_id="qa_warning_message",
     ),
 ]
+
+STARTER_ITEM_IDS = {
+    "americano_coupon",
+    "department_store_voucher",
+    "luxury_handbag",
+    "representative_person",
+    "team_leader_person",
+    "division_head_person",
+}
 
 WORLD_OBJECT_REGISTRY = {item.id: item for item in WORLD_OBJECT_DEFINITIONS}
 
@@ -233,10 +302,14 @@ def build_relationship_graph(npcs: dict[str, NPCState]) -> dict[str, Relationshi
 
 
 def build_initial_world_objects() -> dict[str, WorldObjectState]:
-    return {
+    objects = {
         definition.id: WorldObjectState(**definition.model_dump())
         for definition in WORLD_OBJECT_DEFINITIONS
     }
+    for item_id in STARTER_ITEM_IDS:
+        if item_id in objects:
+            objects[item_id] = objects[item_id].model_copy(update={"holder_id": "player"})
+    return objects
 
 
 def clone_npcs() -> dict[str, NPCState]:

@@ -12,7 +12,7 @@ def test_world_object_registry_has_valid_unique_objects() -> None:
 
     assert len(WORLD_OBJECT_REGISTRY) == len(WORLD_OBJECT_DEFINITIONS)
     assert all(item.id and item.name for item in WORLD_OBJECT_DEFINITIONS)
-    assert all(item.owner_id is None or item.owner_id in npcs for item in WORLD_OBJECT_DEFINITIONS)
+    assert all(item.owner_id is None or item.owner_id == "player" or item.owner_id in npcs for item in WORLD_OBJECT_DEFINITIONS)
     assert all(item.location in {"meeting_room", *NPC_HOME_LOCATIONS.values()} for item in WORLD_OBJECT_DEFINITIONS)
 
 

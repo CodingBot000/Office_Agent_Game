@@ -140,6 +140,9 @@ class WorldObjectDefinition(BaseModel):
     evidence_id: str | None = None
     portable: bool = True
     destructible: bool = True
+    throw_effect: SocialActionFamily = "physical_assault"
+    throw_severity: int = Field(default=5, ge=1, le=5)
+    throw_impact: Literal["split", "blink"] = "split"
 
 
 class WorldObjectState(WorldObjectDefinition):
@@ -164,6 +167,7 @@ class AvailableGameAction(BaseModel):
 class PlayerInventory(BaseModel):
     held_object_ids: list[str] = Field(default_factory=list)
     max_held_objects: int = Field(default=1, ge=1, le=10)
+    unlimited: bool = False
 
 
 class GameActionRequest(BaseModel):

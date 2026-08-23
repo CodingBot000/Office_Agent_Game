@@ -19,6 +19,7 @@ from app.game.seed import (
     clone_relationships,
     clone_world_objects,
     relationship_key,
+    STARTER_ITEM_IDS,
 )
 from app.game.relationship_policy import RelationshipPolicyEngine
 from app.game.action_registry import build_available_game_actions, build_player_inventory
@@ -82,7 +83,7 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 7
+CURRENT_SESSION_SCHEMA_VERSION = 8
 GAME_ACTION_ALERT = "Use the provided action buttons to perform game actions."
 
 
@@ -369,10 +370,13 @@ class GameEngine:
                 }
             )
             session.world_objects[world_object.id] = world_object
-            target.physical_state = "comatose"
-            target.is_fallen = True
-            self._record_comatose_awareness(session, target, world_object)
-            message = f"{world_object.name}을(를) {target.name}에게 던졌습니다. 물건이 파손됐고 {target.name}가 쓰러졌습니다."
+            if world_object.throw_effect == "physical_assault":
+                target.physical_state = "comatose"
+                target.is_fallen = True
+                self._record_comatose_awareness(session, target, world_object)
+                message = f"{world_object.name}을(를) {target.name}에게 던졌습니다. 물건이 파손됐고 {target.name}가 쓰러졌습니다."
+            else:
+                message = f"{world_object.name}을(를) {target.name}에게 던졌습니다. {target.name}의 기분과 플레이어에 대한 신뢰도가 좋아졌습니다."
             self._append_event(session, "Player", message, "game_action", target.id)
         else:
             return self._record_blocked_game_action(session, action, "This game action is not enabled yet.")
@@ -458,15 +462,17 @@ class GameEngine:
         if target_id is None or target_id not in session.npcs:
             return
 
+        effect = world_object.throw_effect
+        reason_codes = ["support"] if effect == "support" else ["physical_danger", "property_damage"]
         classification = SocialImpactClassification(
-            action_family="physical_assault",
+            action_family=effect,
             direct_target_ids=[target_id],
             object_id=world_object.id,
-            severity=5,
+            severity=world_object.throw_severity,
             intentionality="deliberate",
             observable=True,
             evidence_based=False,
-            reason_codes=["physical_danger", "property_damage"],
+            reason_codes=reason_codes,
             confidence=1.0,
         )
         impact_location = NPC_HOME_LOCATIONS.get(target_id, session.current_location)
@@ -679,6 +685,13 @@ class GameEngine:
             payload["player_inventory"] = {"held_object_ids": [], "max_held_objects": 1}
             payload["game_action_traces"] = []
             payload["dialogue_refused_npc_ids"] = []
+        if version < 8:
+            raw_world_objects = dict(payload.get("world_objects", {}))
+            starter_objects = build_initial_world_objects()
+            for item_id in STARTER_ITEM_IDS:
+                if item_id not in raw_world_objects and item_id in starter_objects:
+                    raw_world_objects[item_id] = starter_objects[item_id].model_dump(mode="json")
+            payload["world_objects"] = raw_world_objects
         payload["schema_version"] = CURRENT_SESSION_SCHEMA_VERSION
         return payload, True
 

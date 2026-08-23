@@ -424,7 +424,10 @@ h1, h2, p { margin: 0; }
 .world-interaction-card > div { display: flex; gap: 5px; margin-top: 3px; }
 .world-interaction-card button { border: 1px solid var(--line-bright); background: var(--panel-soft); color: var(--cyan); padding: 4px 6px; cursor: pointer; font: 500 8px var(--mono); }
 .world-interaction-card button:hover { border-color: var(--cyan); }
-.held-world-object { position: absolute; z-index: 2; right: 6%; top: 53%; width: 28%; height: auto; transform: rotate(-12deg); image-rendering: pixelated; }
+.held-world-items { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.held-world-item { position: absolute; width: 28%; height: auto; transform: rotate(-12deg); object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 2px 1px rgba(0,0,0,.55)); }
+.held-world-person { width: 42%; aspect-ratio: 1; }
+.held-world-person .character-sprite { position: absolute; inset: 0; }
 .map-location-chip { position: absolute; right: 1.7%; top: 4.5%; z-index: 20; padding: 5px 7px; border: 1px solid rgba(255,255,255,.38); background: rgba(15,18,21,.58); color: #fff; font: 500 8px var(--mono); letter-spacing: .08em; }
 .visual-controls-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 2px 0; }
 .key-hints { display: flex; flex-wrap: wrap; gap: 15px; color: var(--faint); font: 500 9px var(--mono); letter-spacing: .06em; }
@@ -495,7 +498,8 @@ h1, h2, p { margin: 0; }
 .game-action-group { display: grid; gap: 6px; }
 
 .map-keyboard.is-dropped { display: none; }
-.dropped-world-object { position: absolute; z-index: 10; object-fit: fill; image-rendering: pixelated; filter: drop-shadow(0 2px 1px rgba(0,0,0,.45)); }
+.dropped-world-object { position: absolute; z-index: 10; display: grid; place-items: center; image-rendering: pixelated; filter: drop-shadow(0 2px 1px rgba(0,0,0,.45)); pointer-events: none; }
+.dropped-world-object > img, .dropped-world-object > .character-sprite { width: 100%; height: 100%; object-fit: contain; }
 .world-character-button.fallen { cursor: not-allowed; filter: none; }
 .world-character-button.fallen .character-sprite { transform: rotate(90deg) translateY(-13%); transform-origin: 50% 65%; opacity: .9; }
 .world-character-button.fallen .world-emotion-dot { opacity: .55; }
@@ -521,7 +525,8 @@ h1, h2, p { margin: 0; }
 .player-action-list button:disabled { opacity: .5; cursor: wait; }
 .player-action-list .player-action-back { color: var(--faint); }
 
-.thrown-world-object { position: absolute; z-index: 50; height: auto; object-fit: contain; image-rendering: pixelated; pointer-events: none; transform: translateX(-50%); animation: thrown-keyboard .68s linear forwards; filter: drop-shadow(0 2px 1px rgba(0,0,0,.55)); }
+.thrown-world-object { position: absolute; z-index: 50; display: grid; place-items: center; image-rendering: pixelated; pointer-events: none; transform: translateX(-50%); animation: thrown-keyboard .68s linear forwards; filter: drop-shadow(0 2px 1px rgba(0,0,0,.55)); }
+.thrown-world-object > img, .thrown-world-object > .character-sprite { width: 100%; height: 100%; object-fit: contain; }
 @keyframes thrown-keyboard {
   to { left: var(--throw-target-left); bottom: var(--throw-target-bottom); transform: translateX(-50%) rotate(-1080deg) scale(.82); }
 }
@@ -531,6 +536,9 @@ h1, h2, p { margin: 0; }
 .break-right { clip-path: inset(0 0 0 50%); transform: translateX(22%) rotate(23deg); animation: break-right .48s ease-out forwards; }
 @keyframes break-left { to { transform: translate(-58%, 24%) rotate(-68deg); opacity: 0; } }
 @keyframes break-right { to { transform: translate(58%, 24%) rotate(68deg); opacity: 0; } }
+.world-blink-effect { position: absolute; z-index: 51; display: grid; place-items: center; pointer-events: none; animation: world-item-blink .48s steps(2, end) forwards; }
+.world-blink-effect > img, .world-blink-effect > .character-sprite { width: 100%; height: 100%; object-fit: contain; }
+@keyframes world-item-blink { 0%, 24%, 48%, 72% { opacity: 1; transform: scale(1); } 12%, 36%, 60%, 100% { opacity: 0; transform: scale(1.1); } }
 
 @media (max-width: 1120px) {
   .visual-workspace { width: min(100% - 28px, 980px); grid-template-columns: minmax(0, 1fr) 255px; gap: 15px; }

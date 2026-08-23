@@ -60,6 +60,9 @@ export interface WorldObjectState {
   destructible: boolean;
   holder_id: string | null;
   condition: "normal" | "damaged" | "destroyed";
+  throw_effect: string;
+  throw_severity: number;
+  throw_impact: "split" | "blink";
   is_dropped: boolean;
 }
 
@@ -81,6 +84,7 @@ export interface AvailableGameAction {
 export interface PlayerInventory {
   held_object_ids: string[];
   max_held_objects: number;
+  unlimited: boolean;
 }
 
 export interface GameActionGuardrail {

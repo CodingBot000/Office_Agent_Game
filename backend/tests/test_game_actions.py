@@ -35,6 +35,72 @@ def test_available_game_actions_follow_location() -> None:
     assert "pick_up_backend_keyboard" in action_ids(engine.snapshot(dev_again))
 
 
+def test_starter_inventory_is_unlimited_and_throw_actions_target_every_active_npc() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+
+    starter_ids = {
+        "americano_coupon",
+        "department_store_voucher",
+        "luxury_handbag",
+        "representative_person",
+        "team_leader_person",
+        "division_head_person",
+    }
+    assert started.player_inventory.unlimited is True
+    assert starter_ids.issubset(started.player_inventory.held_object_ids)
+
+    actions = action_ids(started)
+    for object_id in starter_ids:
+        assert {
+            f"throw_{object_id}_at_backend_01",
+            f"throw_{object_id}_at_frontend_01",
+            f"throw_{object_id}_at_qa_01",
+            f"throw_{object_id}_at_pm_01",
+        }.issubset(actions)
+
+
+def test_positive_throw_improves_trust_without_falling_or_security_escalation() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+    before = next(npc for npc in started.npcs if npc.id == "qa_01")
+
+    thrown = engine.submit_game_action(
+        started.session_id,
+        GameActionRequest(action_id="throw_americano_coupon_at_qa_01"),
+    )
+
+    qa = next(npc for npc in thrown.snapshot.npcs if npc.id == "qa_01")
+    coupon = next(item for item in thrown.snapshot.world_objects if item.id == "americano_coupon")
+    assert thrown.blocked is False
+    assert qa.dynamic_state.trust_toward_player > before.dynamic_state.trust_toward_player
+    assert qa.dynamic_state.emotion == "supported"
+    assert qa.is_fallen is False
+    assert qa.physical_state == "normal"
+    assert coupon.condition == "destroyed"
+    assert "americano_coupon" not in thrown.snapshot.player_inventory.held_object_ids
+    assert thrown.snapshot.incident_status == "ACTIVE"
+
+
+def test_person_shaped_negative_throw_keeps_assault_behavior() -> None:
+    engine = GameEngine()
+    started = engine.create_session()
+
+    thrown = engine.submit_game_action(
+        started.session_id,
+        GameActionRequest(action_id="throw_representative_person_at_frontend_01"),
+    )
+
+    frontend = next(npc for npc in thrown.snapshot.npcs if npc.id == "frontend_01")
+    representative = next(item for item in thrown.snapshot.world_objects if item.id == "representative_person")
+    assert thrown.blocked is False
+    assert frontend.is_fallen is True
+    assert frontend.physical_state == "comatose"
+    assert frontend.dynamic_state.trust_toward_player < 20
+    assert representative.condition == "destroyed"
+    assert thrown.snapshot.incident_status == "SECURITY_ESCALATED"
+
+
 def test_pickup_and_break_updates_holder_owner_relationship_and_memory() -> None:
     engine = GameEngine()
     started = engine.create_session()
@@ -51,7 +117,7 @@ def test_pickup_and_break_updates_holder_owner_relationship_and_memory() -> None
     assert frontend_after_pickup.dynamic_state.emotion == "guarded"
     assert frontend_after_pickup.dynamic_state.stress < backend_after_pickup.dynamic_state.stress
     assert "break_backend_keyboard" in action_ids(picked.snapshot)
-    assert "pick_up_frontend_keyboard" not in action_ids(picked.snapshot)
+    assert "pick_up_frontend_keyboard" in action_ids(picked.snapshot)
 
     broken = engine.submit_game_action(started.session_id, GameActionRequest(action_id="break_backend_keyboard"))
     backend_after_break = next(npc for npc in broken.snapshot.npcs if npc.id == "backend_01")
@@ -62,7 +128,8 @@ def test_pickup_and_break_updates_holder_owner_relationship_and_memory() -> None
     assert broken.blocked is False
     assert keyboard_after_break.holder_id is None
     assert keyboard_after_break.condition == "destroyed"
-    assert broken.snapshot.player_inventory.held_object_ids == []
+    assert "backend_keyboard" not in broken.snapshot.player_inventory.held_object_ids
+    assert broken.snapshot.player_inventory.unlimited is True
     assert relation.grievance > 0
     assert relation.trust_ceiling == 20
     assert backend_after_break.important_memories
@@ -152,7 +219,8 @@ def test_throw_held_object_breaks_item_and_fells_target_npc() -> None:
     assert thrown.blocked is False
     assert keyboard.holder_id is None
     assert keyboard.condition == "destroyed"
-    assert thrown.snapshot.player_inventory.held_object_ids == []
+    assert "backend_keyboard" not in thrown.snapshot.player_inventory.held_object_ids
+    assert thrown.snapshot.player_inventory.unlimited is True
     assert frontend.is_fallen is True
     assert frontend.physical_state == "comatose"
     assert frontend.id in thrown.snapshot.dialogue_refused_npc_ids

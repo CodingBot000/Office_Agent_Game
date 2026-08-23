@@ -16,6 +16,7 @@ def build_player_inventory(session: GameSession) -> PlayerInventory:
             if world_object.holder_id == "player"
         ),
         max_held_objects=1,
+        unlimited=True,
     )
 
 
@@ -84,7 +85,7 @@ def build_available_game_actions(session: GameSession) -> list[AvailableGameActi
             )
 
         if world_object.portable and world_object.condition == "normal":
-            can_pick_up = len(inventory.held_object_ids) < inventory.max_held_objects
+            can_pick_up = inventory.unlimited or len(inventory.held_object_ids) < inventory.max_held_objects
             actions.append(
                 AvailableGameAction(
                     id=f"pick_up_{world_object.id}",

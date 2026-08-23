@@ -1,10 +1,23 @@
 import type { AvailableGameAction } from "./types";
 
+const specialWorldObjectNames: Record<string, string> = {
+  americano_coupon: "아메리카노-쿠폰",
+  department_store_voucher: "백화점-상품권",
+  luxury_handbag: "명품-가방",
+  representative_person: "대표님",
+  team_leader_person: "팀장님",
+  division_head_person: "본부장님",
+};
+
 export function formatWorldObjectName(name: string): string {
   return name.trim().replace(/\s+/g, "-");
 }
 
 function formatWorldObjectId(objectId: string): string {
+  if (specialWorldObjectNames[objectId]) {
+    return specialWorldObjectNames[objectId];
+  }
+
   return objectId
     .split("_")
     .filter(Boolean)
