@@ -695,7 +695,7 @@ function HeldWorldItem({ object, index }: { object: GameSnapshot["world_objects"
   if (isPersonObjectId(object.id)) {
     return (
       <span className="held-world-item held-world-person" style={style} aria-label={`${object.name} 소지 중`}>
-        <CharacterSprite asset={getWorldObjectAsset(object.id)} direction="front" />
+        <img src={getWorldObjectAsset(object.id)} alt={`${object.name} 소지 중`} draggable={false} />
       </span>
     );
   }
@@ -705,7 +705,7 @@ function HeldWorldItem({ object, index }: { object: GameSnapshot["world_objects"
 
 function WorldObjectVisual({ objectId, className = "" }: { objectId: string; className?: string }) {
   if (isPersonObjectId(objectId)) {
-    return <CharacterSprite asset={getWorldObjectAsset(objectId)} direction="front" className={`world-object-person ${className}`} />;
+    return <img className={`world-object-person ${className}`} src={getWorldObjectAsset(objectId)} alt="" draggable={false} />;
   }
 
   return <img className={className} src={getWorldObjectAsset(objectId)} alt="" draggable={false} />;
@@ -718,11 +718,11 @@ function getWorldObjectAsset(objectId: string): string {
     case "luxury_handbag":
       return `${OFFICE_ASSET_BASE}/items/${objectId}.png`;
     case "representative_person":
-      return `${OFFICE_ASSET_BASE}/characters/backend.png`;
+      return `${OFFICE_ASSET_BASE}/items/representative_person.png`;
     case "team_leader_person":
-      return `${OFFICE_ASSET_BASE}/characters/frontend.png`;
+      return `${OFFICE_ASSET_BASE}/items/team_leader_person.png`;
     case "division_head_person":
-      return `${OFFICE_ASSET_BASE}/characters/pm.png`;
+      return `${OFFICE_ASSET_BASE}/items/division_head_person.png`;
     default:
       return `${OFFICE_ASSET_BASE}/keyboard.png`;
   }

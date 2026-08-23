@@ -427,7 +427,7 @@ h1, h2, p { margin: 0; }
 .held-world-items { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 .held-world-item { position: absolute; width: 28%; height: auto; transform: rotate(-12deg); object-fit: contain; image-rendering: pixelated; filter: drop-shadow(0 2px 1px rgba(0,0,0,.55)); }
 .held-world-person { width: 42%; aspect-ratio: 1; }
-.held-world-person .character-sprite { position: absolute; inset: 0; }
+.held-world-person > img { width: 100%; height: 100%; object-fit: contain; }
 .map-location-chip { position: absolute; right: 1.7%; top: 4.5%; z-index: 20; padding: 5px 7px; border: 1px solid rgba(255,255,255,.38); background: rgba(15,18,21,.58); color: #fff; font: 500 8px var(--mono); letter-spacing: .08em; }
 .visual-controls-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 2px 0; }
 .key-hints { display: flex; flex-wrap: wrap; gap: 15px; color: var(--faint); font: 500 9px var(--mono); letter-spacing: .06em; }
@@ -500,6 +500,7 @@ h1, h2, p { margin: 0; }
 .map-keyboard.is-dropped { display: none; }
 .dropped-world-object { position: absolute; z-index: 10; display: grid; place-items: center; image-rendering: pixelated; filter: drop-shadow(0 2px 1px rgba(0,0,0,.45)); pointer-events: none; }
 .dropped-world-object > img, .dropped-world-object > .character-sprite { width: 100%; height: 100%; object-fit: contain; }
+.world-object-person { width: 100%; height: 100%; object-fit: contain; }
 .world-character-button.fallen { cursor: not-allowed; filter: none; }
 .world-character-button.fallen .character-sprite { transform: rotate(90deg) translateY(-13%); transform-origin: 50% 65%; opacity: .9; }
 .world-character-button.fallen .world-emotion-dot { opacity: .55; }
