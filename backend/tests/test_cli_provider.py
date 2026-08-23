@@ -86,6 +86,10 @@ def test_cli_intent_provider_parses_semantic_intent(monkeypatch: pytest.MonkeyPa
             json.dumps(
                 {
                     "intent": "ask",
+                    "interaction_kind": "dialogue",
+                    "game_action_family": None,
+                    "question_type": "general_status",
+                    "reference_scope": "none",
                     "target_npc_id": "qa_01",
                     "evidence_id": None,
                     "location": None,
@@ -114,6 +118,7 @@ def test_cli_intent_provider_parses_semantic_intent(monkeypatch: pytest.MonkeyPa
     )
 
     assert intent.intent == "ask"
+    assert intent.question_type == "general_status"
     assert intent.target_npc_id == "qa_01"
     assert intent.confidence == 0.98
 

@@ -32,6 +32,10 @@ def test_openai_intent_provider_uses_responses_structured_output(monkeypatch: py
         return fake_api_response(
             {
                 "intent": "ask",
+                "interaction_kind": "dialogue",
+                "game_action_family": None,
+                "question_type": "general_status",
+                "reference_scope": "none",
                 "target_npc_id": "qa_01",
                 "evidence_id": None,
                 "location": None,
@@ -62,6 +66,7 @@ def test_openai_intent_provider_uses_responses_structured_output(monkeypatch: py
     )
 
     assert intent.intent == "ask"
+    assert intent.question_type == "general_status"
     assert captured["url"] == "https://api.openai.com/v1/responses"
     assert captured["payload"]["text"]["format"]["type"] == "json_schema"
     assert captured["authorization"] == "Bearer test-key"

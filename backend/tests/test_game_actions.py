@@ -101,6 +101,16 @@ def test_person_shaped_negative_throw_keeps_assault_behavior() -> None:
     assert thrown.snapshot.incident_status == "SECURITY_ESCALATED"
 
 
+def test_person_item_impact_keeps_representative_split_but_blinks_team_lead_and_division_head() -> None:
+    engine = GameEngine()
+    snapshot = engine.create_session()
+    impact_by_id = {item.id: item.throw_impact for item in snapshot.world_objects}
+
+    assert impact_by_id["representative_person"] == "split"
+    assert impact_by_id["team_leader_person"] == "blink"
+    assert impact_by_id["division_head_person"] == "blink"
+
+
 def test_pickup_and_break_updates_holder_owner_relationship_and_memory() -> None:
     engine = GameEngine()
     started = engine.create_session()

@@ -61,6 +61,17 @@ SocialReasonCode = Literal[
 ]
 
 InteractionKind = Literal["dialogue", "game_action_attempt"]
+QuestionType = Literal[
+    "none",
+    "general_status",
+    "cause_analysis",
+    "evidence_request",
+    "evidence_followup",
+    "responsibility_routing",
+    "approval_process",
+    "relationship_action",
+]
+ReferenceScope = Literal["none", "explicit", "latest_discovered", "conversation_context"]
 GameActionFamily = Literal[
     "pick_up_object",
     "break_held_object",
@@ -335,6 +346,8 @@ class IntentClassification(BaseModel):
     intent: ActionType
     interaction_kind: InteractionKind = "dialogue"
     game_action_family: GameActionFamily | None = None
+    question_type: QuestionType = "none"
+    reference_scope: ReferenceScope = "none"
     target_npc_id: str | None = None
     evidence_id: str | None = None
     location: Literal["meeting_room", "dev_area", "qa_desk", "pm_desk"] | None = None
@@ -378,6 +391,11 @@ class FallbackNotice(BaseModel):
         "intent_guardrail",
         "decision_provider",
         "decision_guardrail",
+        "decision_disclosure_guardrail",
+        "decision_fact_consistency_guardrail",
+        "decision_responsibility_routing",
+        "decision_unavailable_role_guardrail",
+        "decision_discovered_evidence_followup",
         "social_impact_provider",
         "social_impact_guardrail",
     ]
@@ -426,6 +444,9 @@ class ActionResponse(BaseModel):
     intent_provider: Literal["cli", "openai", "deterministic-mock", "ui"]
     intent_confidence: float = Field(ge=0, le=1)
     intent_fallback_used: bool = False
+    question_type: QuestionType = "none"
+    reference_scope: ReferenceScope = "none"
+    evidence_id: str | None = None
     social_impact_provider: Literal["cli", "openai", "deterministic-mock"] | None = None
     social_impact_fallback_used: bool = False
     blocked: bool = False

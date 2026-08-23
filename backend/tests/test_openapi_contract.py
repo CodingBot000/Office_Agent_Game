@@ -69,11 +69,19 @@ def test_openapi_contains_unity_client_contract() -> None:
     )
 
     action_response = schema["components"]["schemas"]["ActionResponse"]
-    assert {"social_impact_provider", "social_impact_fallback_used"}.issubset(action_response["properties"])
+    assert {
+        "question_type",
+        "reference_scope",
+        "evidence_id",
+        "social_impact_provider",
+        "social_impact_fallback_used",
+    }.issubset(action_response["properties"])
     assert {"blocked", "alert"}.issubset(action_response["properties"])
 
     intent = schema["components"]["schemas"]["IntentClassification"]
-    assert {"interaction_kind", "game_action_family"}.issubset(intent["properties"])
+    assert {"interaction_kind", "game_action_family", "question_type", "reference_scope"}.issubset(
+        intent["properties"]
+    )
 
     world_object = schema["components"]["schemas"]["WorldObjectState"]
     assert "holder_id" in world_object["properties"]

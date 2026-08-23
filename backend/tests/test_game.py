@@ -115,6 +115,130 @@ def test_target_hint_guides_semantic_question_without_changing_player_text() -> 
     assert "Critical Issue" not in response.message
 
 
+def test_normal_question_rejects_protected_evidence_leak() -> None:
+    class LeakingDecisionProvider:
+        name = "openai"
+        model = "test-model"
+
+        def decide(self, context: object) -> AgentDecision:
+            npc = context.npc  # type: ignore[attr-defined]
+            return AgentDecision(
+                npc_id=npc.id,
+                emotion=npc.dynamic_state.emotion,
+                stress_delta=0,
+                trust_delta=0,
+                cooperation_delta=0,
+                grounding_type="acknowledgement",
+                action_type="dialogue",
+                dialogue=(
+                    "[16:40] QA: Critical — API response mismatch found in production-like test. "
+                    "Recommend blocking deployment until the contract is verified."
+                ),
+            )
+
+    engine = GameEngine(
+        provider=LeakingDecisionProvider(),
+        intent_provider=FixedIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "지금 무엇을 확인하고 있어?", target_hint="qa_01")
+
+    assert "API response mismatch" not in response.message
+    assert response.snapshot.fallback_notices[-1].stage == "decision_disclosure_guardrail"
+
+
+def test_responsibility_question_routes_to_named_owner_instead_of_unknown() -> None:
+    expected_by_target = {
+        "qa_01": "Backend Developer가 담당했습니다",
+        "backend_01": "제가 담당했습니다",
+        "pm_01": "Backend Developer가 담당했습니다",
+    }
+
+    for target_id, expected_phrase in expected_by_target.items():
+        engine = GameEngine(
+            provider=DeterministicDecisionProvider(),
+            intent_provider=DeterministicIntentProvider(),
+        )
+        snapshot = engine.create_session()
+
+        response = engine.submit_action(
+            snapshot.session_id,
+            "이 배포의 책임자와 담당자가 누구야? 누구에게 물어봐야 해?",
+            target_hint=target_id,
+        )
+
+        assert response.classified_action == "ask"
+        assert expected_phrase in response.message
+        assert "모르" not in response.message
+        assert response.question_type == "responsibility_routing"
+        assert response.snapshot.agent_traces[-1].fallback_used is False
+
+
+def test_semantic_responsibility_intent_handles_unfamiliar_paraphrase() -> None:
+    class SemanticResponsibilityProvider:
+        name = "cli"
+        model = "semantic-test"
+
+        def classify(self, context: object) -> IntentClassification:
+            return IntentClassification(
+                intent="ask",
+                question_type="responsibility_routing",
+                reference_scope="none",
+                target_npc_id=context.target_hint,  # type: ignore[attr-defined]
+                confidence=0.97,
+            )
+
+    engine = GameEngine(
+        provider=DeterministicDecisionProvider(),
+        intent_provider=SemanticResponsibilityProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(
+        snapshot.session_id,
+        "이번 릴리스의 오너십 구조를 역할별로 정리해 줘.",
+        target_hint="pm_01",
+    )
+
+    assert response.classified_action == "ask"
+    assert response.question_type == "responsibility_routing"
+    assert "Backend Developer가 담당했습니다" in response.message
+    assert response.intent_fallback_used is False
+
+
+def test_unavailable_team_lead_reference_is_replaced_with_available_role_guidance() -> None:
+    class TeamLeadOnlyProvider:
+        name = "openai"
+        model = "test-model"
+
+        def decide(self, context: object) -> AgentDecision:
+            npc = context.npc  # type: ignore[attr-defined]
+            return AgentDecision(
+                npc_id=npc.id,
+                emotion=npc.dynamic_state.emotion,
+                stress_delta=0,
+                trust_delta=0,
+                cooperation_delta=0,
+                grounding_type="fact",
+                knowledge_refs=list(npc.known_fact_ids),
+                action_type="dialogue",
+                dialogue="정확한 승인 경위는 Team Lead에게 먼저 확인해 주세요.",
+            )
+
+    engine = GameEngine(
+        provider=TeamLeadOnlyProvider(),
+        intent_provider=DeterministicIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    response = engine.submit_action(snapshot.session_id, "승인 절차가 어떻게 됐어?", target_hint="qa_01")
+
+    assert "Team Lead" not in response.message
+    assert "팀 리드" not in response.message
+    assert response.snapshot.fallback_notices[-1].stage == "decision_unavailable_role_guardrail"
+
+
 def test_request_evidence_reveals_requested_warning() -> None:
     class FixedEvidenceIntentProvider:
         name = "cli"
@@ -137,6 +261,74 @@ def test_request_evidence_reveals_requested_warning() -> None:
     assert response.classified_action == "request_evidence"
     assert warning.discovered is True
     assert "API response mismatch" in response.message
+
+
+def test_discovered_evidence_followup_explains_without_requesting_same_evidence_again() -> None:
+    engine = GameEngine(
+        provider=DeterministicDecisionProvider(),
+        intent_provider=DeterministicIntentProvider(),
+    )
+    snapshot = engine.create_session()
+
+    revealed = engine.submit_action(
+        snapshot.session_id,
+        "QA에게 배포 전 경고 메시지를 보여줘.",
+        target_hint="qa_01",
+    )
+    assert revealed.classified_action == "request_evidence"
+
+    followup = engine.submit_action(
+        snapshot.session_id,
+        "이게 뭐야?",
+        target_hint="qa_01",
+    )
+
+    assert "production-like 테스트에서 API response mismatch" in followup.message
+    assert "증거를 요청" not in followup.message
+    assert followup.question_type == "evidence_followup"
+    assert followup.reference_scope == "latest_discovered"
+    assert followup.evidence_id == "qa_warning_message"
+    assert followup.snapshot.agent_traces[-1].fallback_used is False
+
+
+def test_semantic_evidence_followup_resolves_conversation_reference_without_phrase_list() -> None:
+    class SemanticEvidenceFollowupProvider:
+        name = "cli"
+        model = "semantic-test"
+
+        def classify(self, context: object) -> IntentClassification:
+            return IntentClassification(
+                intent="ask",
+                question_type="evidence_followup",
+                reference_scope="conversation_context",
+                target_npc_id=context.target_hint,  # type: ignore[attr-defined]
+                evidence_id=None,
+                confidence=0.96,
+            )
+
+    engine = GameEngine(
+        provider=DeterministicDecisionProvider(),
+        intent_provider=SemanticEvidenceFollowupProvider(),
+    )
+    snapshot = engine.create_session()
+    session = engine.get_session(snapshot.session_id)
+    engine._discover_evidence(session, "qa_warning_message")
+    evidence = session.evidences["qa_warning_message"]
+    engine._append_event(session, "QA Engineer", f"증거를 확보했습니다. {evidence.title}", "evidence", "qa_01")
+    engine._save_session(session)
+
+    response = engine.submit_action(
+        snapshot.session_id,
+        "방금 공개된 기록이 장애 판단에 갖는 함의를 풀어서 말해 줘.",
+        target_hint="qa_01",
+    )
+
+    assert response.question_type == "evidence_followup"
+    assert response.reference_scope == "conversation_context"
+    assert response.evidence_id == "qa_warning_message"
+    assert "API response mismatch" in response.message
+    assert "증거를 요청" not in response.message
+    assert response.intent_fallback_used is False
 
 
 def test_misclassified_evidence_request_falls_back_to_npc_reveal(caplog) -> None:
@@ -243,7 +435,7 @@ def test_evidence_propagates_to_backend_belief() -> None:
 def test_evidence_presentation_has_recipient_specific_reaction() -> None:
     for target_id, expected_phrase in (
         ("qa_01", "제가 보낸 경고"),
-        ("backend_01", "배포 판단"),
+        ("backend_01", "배포를 진행했고"),
         ("frontend_01", "프론트엔드 반영"),
         ("pm_01", "일정과 승인"),
     ):
@@ -257,6 +449,41 @@ def test_evidence_presentation_has_recipient_specific_reaction() -> None:
         assert expected_phrase in response
         assert session.events[-1].actor_id == target_id
         assert session.events[-1].event_type == "evidence"
+
+
+def test_contradictory_backend_evidence_reaction_uses_fact_safe_fallback() -> None:
+    class ContradictoryEvidenceProvider:
+        name = "openai"
+        model = "test-model"
+
+        def decide(self, context: object) -> AgentDecision:
+            npc = context.npc  # type: ignore[attr-defined]
+            return AgentDecision(
+                npc_id=npc.id,
+                emotion=npc.dynamic_state.emotion,
+                stress_delta=0,
+                trust_delta=0,
+                cooperation_delta=0,
+                grounding_type="acknowledgement",
+                action_type="show_evidence",
+                action_target="qa_warning_message",
+                dialogue=(
+                    "제가 릴리스를 배포했고 API 응답 스키마도 변경했지만, "
+                    "계약을 검증하기 전에 배포를 진행하지 않았습니다."
+                ),
+            )
+
+    engine = GameEngine(provider=ContradictoryEvidenceProvider())
+    session = engine.get_session(engine.create_session().session_id)
+    engine._discover_evidence(session, "qa_warning_message")
+
+    response = engine._show_evidence(session, "backend_01", "qa_warning_message")
+
+    assert "API 응답 스키마를 변경한 상태에서 배포를 진행했고" in response
+    assert "당시 판단 과정을 다시 검토하겠습니다." in response
+    assert "배포를 진행하지 않았습니다" not in response
+    assert session.agent_traces[-1].fallback_used is True
+    assert session.fallback_notices[-1].stage == "decision_fact_consistency_guardrail"
 
 
 def test_repeated_evidence_presentation_has_no_second_state_change() -> None:

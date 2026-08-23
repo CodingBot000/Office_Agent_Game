@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Callable, get_args
@@ -9,9 +10,11 @@ from uuid import uuid4
 from app.config import Settings, get_settings
 from app.game.seed import (
     CANONICAL_TRUTH,
+    DEFAULT_EVIDENCE_BY_SOURCE_NPC,
     FACT_REGISTRY,
     INCIDENT_RULES,
     LEGACY_FACT_TEXT_TO_ID,
+    RESPONSIBILITY_FACT_IDS,
     build_initial_world_objects,
     build_relationship_graph,
     clone_evidence,
@@ -91,6 +94,32 @@ AVAILABLE_ACTIONS = list(get_args(ActionType))
 
 ALLOWED_AGENT_ACTION_TYPES = {"dialogue", "show_evidence", "belief_update"}
 
+# Evidence reactions may be phrased by an LLM, but they must not rewrite the
+# incident's canonical timeline. These patterns cover explicit denials of the
+# facts that are central to the Backend/QA warning scenario. Regretful wording
+# such as "배포하지 않았어야 했습니다" is intentionally allowed.
+KNOWN_FACT_CONTRADICTION_PATTERNS = {
+    "backend_executed_deployment": (
+        r"배포(?:를|는|가)?\s*(?:진행\s*)?하지\s*않았(?!어야)",
+        r"배포(?:를|는|가)?\s*안\s*(?:했|했습니다|했었)",
+        r"릴리스(?:를|는|가)?\s*(?:진행\s*)?하지\s*않았(?!어야)",
+        r"(?:did not|didn't)\s+(?:deploy|release)",
+        r"(?:was not|wasn't)\s+(?:deployed|released)",
+        r"(?:not|never)\s+(?:deployed|released)",
+    ),
+    "backend_changed_api_schema": (
+        r"(?:api\s*)?(?:응답\s*)?스키마(?:를|는|가|도)?\s*(?:변경|변경하|바꾸|바꿔)지?\s*않았(?!어야)",
+        r"(?:did not|didn't)\s+change\s+(?:the\s+)?api\s+(?:response\s+)?schema",
+        r"(?:api\s+)?schema\s+was not\s+changed",
+    ),
+}
+
+UNAVAILABLE_ROLE_REFERENCE_PATTERNS = (
+    r"team\s*lead",
+    r"teamlead",
+    r"팀\s*리더",
+    r"팀\s*리드",
+)
 
 @dataclass
 class GameSession:
@@ -208,6 +237,9 @@ class GameEngine:
                 intent_provider=intent_provider,
                 intent_confidence=intent.confidence,
                 intent_fallback_used=intent_fallback,
+                question_type=intent.question_type,
+                reference_scope=intent.reference_scope,
+                evidence_id=intent.evidence_id,
                 blocked=True,
                 alert=GAME_ACTION_ALERT,
             )
@@ -240,6 +272,9 @@ class GameEngine:
                 intent_provider=intent_provider,
                 intent_confidence=intent.confidence,
                 intent_fallback_used=intent_fallback,
+                question_type=intent.question_type,
+                reference_scope=intent.reference_scope,
+                evidence_id=intent.evidence_id,
                 blocked=True,
                 alert=alert,
             )
@@ -256,6 +291,9 @@ class GameEngine:
             intent_provider=intent_provider,
             intent_confidence=intent.confidence,
             intent_fallback_used=intent_fallback,
+            question_type=intent.question_type,
+            reference_scope=intent.reference_scope,
+            evidence_id=intent.evidence_id,
             social_impact_provider=social_trace.provider if social_trace else None,
             social_impact_fallback_used=social_trace.fallback_used if social_trace else False,
         )
@@ -737,20 +775,6 @@ class GameEngine:
         text: str,
         target_hint: str | None = None,
     ) -> tuple[IntentClassification, bool]:
-        if self._is_explicit_evidence_request(text):
-            evidence_id = self._evidence_from_text(text) or "qa_warning_message"
-            target_id = target_hint or ("qa_01" if "qa" in text.casefold() else None)
-            if target_id in session.npcs and evidence_id in session.evidences:
-                return (
-                    IntentClassification(
-                        intent="request_evidence",
-                        target_npc_id=target_id,
-                        evidence_id=evidence_id,
-                        confidence=1.0,
-                    ),
-                    False,
-                )
-
         context = IntentContext(
             player_input=text,
             current_location=session.current_location,
@@ -761,6 +785,12 @@ class GameEngine:
             discovered_evidence_ids=tuple(sorted(session.discovered_evidence)),
             available_locations=("meeting_room", "dev_area", "qa_desk", "pm_desk"),
             available_actions=tuple(AVAILABLE_ACTIONS),
+            available_evidences=tuple(
+                f"{evidence.id}: {evidence.title} — {evidence.summary}"
+                for evidence in session.evidences.values()
+            ),
+            recent_events=self._intent_recent_events(session),
+            latest_discovered_evidence_id=self._latest_discovered_evidence_id(session),
         )
         try:
             candidate = self.intent_provider.classify(context)
@@ -786,30 +816,88 @@ class GameEngine:
         }:
             candidate = candidate.model_copy(update={"target_npc_id": target_hint})
 
+        candidate = self._resolve_intent_references(session, candidate)
         validated, validation_fallback = self._validate_intent(session, context, candidate)
         return validated, provider_fallback or validation_fallback
 
-    def _is_explicit_evidence_request(self, text: str) -> bool:
-        normalized = text.casefold()
-        direct_terms = (
-            "에러명",
-            "오류명",
-            "에러 메시지",
-            "오류 메시지",
-            "에러 내용",
-            "오류 내용",
-            "무슨 이슈",
-            "어떤 이슈",
-            "치명적 이슈",
-            "critical issue",
-        )
-        if any(term in normalized for term in direct_terms):
-            return True
+    def _resolve_intent_references(
+        self,
+        session: GameSession,
+        candidate: IntentClassification,
+    ) -> IntentClassification:
+        updates: dict[str, object] = {}
+        question_type = candidate.question_type
+        reference_scope = candidate.reference_scope
+        evidence_id = candidate.evidence_id
 
-        return (
-            any(term in normalized for term in ("에러", "오류", "이슈"))
-            and any(term in normalized for term in ("알려", "말해", "설명", "보여", "뭐야", "무엇"))
-        )
+        if candidate.intent == "request_evidence" and question_type == "none":
+            question_type = "evidence_request"
+            updates["question_type"] = question_type
+        elif candidate.intent == "ask" and question_type == "none":
+            updates["question_type"] = "general_status"
+
+        if question_type == "evidence_request":
+            updates["intent"] = "request_evidence"
+
+        if question_type == "responsibility_routing":
+            updates.update({"intent": "ask", "evidence_id": None, "reference_scope": "none"})
+
+        if question_type in {"general_status", "cause_analysis", "approval_process"}:
+            updates["intent"] = "ask"
+
+        if question_type == "evidence_followup":
+            updates["intent"] = "ask"
+            if evidence_id is None and reference_scope in {"latest_discovered", "conversation_context"}:
+                evidence_id = self._latest_discovered_evidence_id(session)
+                updates["evidence_id"] = evidence_id
+            if evidence_id is not None and reference_scope == "none":
+                updates["reference_scope"] = "explicit"
+
+        effective_intent = str(updates.get("intent", candidate.intent))
+
+        if effective_intent == "request_evidence" and evidence_id is None:
+            evidence_id = DEFAULT_EVIDENCE_BY_SOURCE_NPC.get(candidate.target_npc_id or "")
+            if evidence_id is not None:
+                updates["evidence_id"] = evidence_id
+                if reference_scope == "none":
+                    updates["reference_scope"] = "conversation_context"
+
+        if effective_intent == "show_evidence" and evidence_id is None:
+            evidence_id = self._latest_discovered_evidence_id(session)
+            updates["evidence_id"] = evidence_id
+            if evidence_id is not None and reference_scope == "none":
+                updates["reference_scope"] = "latest_discovered"
+
+        return candidate.model_copy(update=updates) if updates else candidate
+
+    def _intent_recent_events(self, session: GameSession) -> tuple[str, ...]:
+        events = []
+        for event in session.events[-8:]:
+            evidence_id = self._evidence_id_from_event(session, event)
+            if event.event_type == "evidence" and evidence_id is not None:
+                evidence = session.evidences[evidence_id]
+                events.append(
+                    f"TURN {event.turn} · {event.actor}: discovered_evidence={evidence.id} title={evidence.title}"
+                )
+            else:
+                events.append(f"TURN {event.turn} · {event.actor}: {event.message}")
+        return tuple(events)
+
+    def _latest_discovered_evidence_id(self, session: GameSession) -> str | None:
+        for event in reversed(session.events):
+            evidence_id = self._evidence_id_from_event(session, event)
+            if evidence_id in session.discovered_evidence:
+                return evidence_id
+        return next(iter(sorted(session.discovered_evidence)), None)
+
+    def _evidence_id_from_event(self, session: GameSession, event: EventLogEntry) -> str | None:
+        if event.event_type != "evidence":
+            return None
+        normalized = event.message.casefold()
+        for evidence_id, evidence in session.evidences.items():
+            if evidence_id.casefold() in normalized or evidence.title.casefold() in normalized:
+                return evidence_id
+        return None
 
     def _validate_intent_hint(self, session: GameSession, candidate: IntentClassification) -> IntentClassification:
         if candidate.intent != "move":
@@ -837,7 +925,11 @@ class GameEngine:
                 else bool(session.discovered_evidence)
             )
         )
-        if target_valid and evidence_valid and location_valid and player_has_evidence:
+        followup_evidence_owned = (
+            candidate.question_type != "evidence_followup"
+            or candidate.evidence_id in session.discovered_evidence
+        )
+        if target_valid and evidence_valid and location_valid and player_has_evidence and followup_evidence_owned:
             return candidate, False
 
         failed_checks = []
@@ -849,13 +941,16 @@ class GameEngine:
             failed_checks.append("location_exists")
         if not player_has_evidence:
             failed_checks.append("player_evidence_ownership")
+        if not followup_evidence_owned:
+            failed_checks.append("followup_evidence_discovered")
         self._record_fallback(
             session,
             stage="intent_guardrail",
             provider=self.intent_provider.name,
             reason=f"Intent guardrail rejected: {', '.join(failed_checks)}.",
         )
-        return self.intent_fallback_provider.classify(context), True
+        fallback = self._resolve_intent_references(session, self.intent_fallback_provider.classify(context))
+        return fallback, True
 
     def _handle_action(self, session: GameSession, intent: IntentClassification, text: str) -> str:
         handlers = self._action_handlers(session, intent, text)
@@ -871,8 +966,8 @@ class GameEngine:
     ) -> dict[str, Callable[[], str]]:
         target_id = intent.target_npc_id
         return {
-            "talk": lambda: self._talk_npc(session, target_id, text),
-            "ask": lambda: self._ask_npc(session, target_id, text),
+            "talk": lambda: self._talk_npc(session, target_id, text, intent),
+            "ask": lambda: self._ask_npc(session, target_id, text, intent),
             "accuse": lambda: self._accuse_npc(session, target_id, text),
             "defend": lambda: self._defend_npc(session, target_id, text),
             "order": lambda: self._handle_order(session),
@@ -1457,7 +1552,7 @@ class GameEngine:
         return "최종 보고서를 입력하면 사건을 종료할 수 있습니다."
 
     def _inspect_evidence(self, session: GameSession, text: str, evidence_id: str | None = None) -> str:
-        evidence_id = evidence_id or self._evidence_from_text(text) or "release_timeline"
+        evidence_id = evidence_id or "release_timeline"
         self._discover_evidence(session, evidence_id)
         evidence = session.evidences[evidence_id]
         self._append_event(
@@ -1590,7 +1685,7 @@ class GameEngine:
                     importance=0.7,
                     turn=session.turn,
                 ),
-                "fallback_dialogue": "QA 경고가 있었던 것은 확인했습니다. 당시 배포 판단 과정을 다시 검토하겠습니다.",
+                "fallback_dialogue": "QA 경고가 있었던 것은 확인했습니다. 제가 API 응답 스키마를 변경한 상태에서 배포를 진행했고, 당시 판단 과정을 다시 검토하겠습니다.",
             }
 
         if npc.id == "frontend_01":
@@ -1648,7 +1743,7 @@ class GameEngine:
         evidence_id: str | None,
         text: str,
     ) -> str:
-        evidence_id = evidence_id or self._evidence_from_text(text) or "qa_warning_message"
+        evidence_id = evidence_id or DEFAULT_EVIDENCE_BY_SOURCE_NPC.get(target_id or "") or "qa_warning_message"
         self._discover_evidence(session, evidence_id)
         evidence = session.evidences[evidence_id]
         actor = session.npcs[target_id].name if target_id in session.npcs else "System"
@@ -1661,7 +1756,13 @@ class GameEngine:
         )
         return evidence.content
 
-    def _talk_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
+    def _talk_npc(
+        self,
+        session: GameSession,
+        target_id: str | None,
+        player_input: str = "",
+        intent: IntentClassification | None = None,
+    ) -> str:
         target_id = target_id or "qa_01"
         npc = session.npcs.get(target_id)
         if npc is None:
@@ -1671,7 +1772,7 @@ class GameEngine:
             return self._record_comatose_response(session, npc)
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
-        decision, provider_fallback = self._request_decision(session, npc, "talk", player_input)
+        decision, provider_fallback = self._request_decision(session, npc, "talk", player_input, intent)
         applied_decision = self._apply_decision(
             session,
             npc,
@@ -1682,7 +1783,13 @@ class GameEngine:
         self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
         return applied_decision.dialogue
 
-    def _ask_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
+    def _ask_npc(
+        self,
+        session: GameSession,
+        target_id: str | None,
+        player_input: str = "",
+        intent: IntentClassification | None = None,
+    ) -> str:
         target_id = target_id or "qa_01"
         npc = session.npcs.get(target_id)
         if npc is None:
@@ -1692,7 +1799,7 @@ class GameEngine:
             return self._record_comatose_response(session, npc)
         if target_id in session.dialogue_refused_npc_ids:
             return self._record_dialogue_refusal(session, npc)
-        decision, provider_fallback = self._request_decision(session, npc, "ask", player_input)
+        decision, provider_fallback = self._request_decision(session, npc, "ask", player_input, intent)
         applied_decision = self._apply_decision(
             session,
             npc,
@@ -1764,7 +1871,16 @@ class GameEngine:
         npc: NPCState,
         mode: str,
         player_input: str,
+        intent: IntentClassification | None = None,
     ) -> tuple[AgentDecision, bool]:
+        question_type = intent.question_type if intent is not None else "none"
+        reference_scope = intent.reference_scope if intent is not None else "none"
+        referenced_evidence_id = intent.evidence_id if intent is not None else None
+        referenced_evidence = (
+            session.evidences.get(referenced_evidence_id or "")
+            if question_type == "evidence_followup" and referenced_evidence_id in session.discovered_evidence
+            else None
+        )
         context = DecisionContext(
             mode=mode,
             player_input=player_input,
@@ -1779,15 +1895,61 @@ class GameEngine:
             available_evidence_ids=tuple(session.evidences),
             recent_events=self._decision_recent_events(session, mode),
             incident_rules=tuple(INCIDENT_RULES),
+            question_type=question_type,
+            reference_scope=reference_scope,
+            discovered_evidence_ids=tuple(sorted(session.discovered_evidence)),
+            referenced_evidence_id=referenced_evidence.id if referenced_evidence is not None else None,
+            referenced_evidence_title=referenced_evidence.title if referenced_evidence is not None else None,
+            referenced_evidence_summary=referenced_evidence.summary if referenced_evidence is not None else None,
+            referenced_evidence_content=referenced_evidence.content if referenced_evidence is not None else None,
+            responsibility_map=tuple(
+                f"{fact_id}: {FACT_REGISTRY[fact_id].statement}"
+                for fact_id in RESPONSIBILITY_FACT_IDS
+            ),
         )
         try:
             decision = self.provider.decide(context)
-            if mode in {"talk", "ask"} and self._contains_evidence_leak(session, decision.dialogue):
+            allowed_evidence_ids = (
+                {referenced_evidence.id}
+                if question_type == "evidence_followup" and referenced_evidence is not None
+                else set()
+            )
+            if mode in {"talk", "ask"} and self._contains_evidence_leak(
+                session,
+                decision.dialogue,
+                allowed_evidence_ids,
+            ):
                 self._record_fallback(
                     session,
                     stage="decision_disclosure_guardrail",
                     provider=self.provider.name,
                     reason="Normal dialogue attempted to disclose protected evidence content.",
+                )
+                return self.fallback_provider.decide(context), True
+            if question_type == "responsibility_routing" and not any(
+                fact_id in RESPONSIBILITY_FACT_IDS for fact_id in decision.knowledge_refs
+            ):
+                self._record_fallback(
+                    session,
+                    stage="decision_guardrail",
+                    provider=self.provider.name,
+                    reason="Responsibility answer omitted server-owned responsibility facts.",
+                )
+                return self.fallback_provider.decide(context), True
+            if mode in {"talk", "ask"} and self._contains_unavailable_role_reference(session, decision.dialogue):
+                self._record_fallback(
+                    session,
+                    stage="decision_unavailable_role_guardrail",
+                    provider=self.provider.name,
+                    reason="Dialogue directed the player to a role that is not an available NPC.",
+                )
+                return self.fallback_provider.decide(context), True
+            if mode == "show_evidence" and self._contains_known_fact_contradiction(npc, decision.dialogue):
+                self._record_fallback(
+                    session,
+                    stage="decision_fact_consistency_guardrail",
+                    provider=self.provider.name,
+                    reason="Evidence reaction contradicted a canonical incident fact.",
                 )
                 return self.fallback_provider.decide(context), True
             return decision, False
@@ -1812,9 +1974,17 @@ class GameEngine:
                 redacted.append(f"TURN {event.turn} · {event.actor}: {event.message}")
         return tuple(redacted)
 
-    def _contains_evidence_leak(self, session: GameSession, dialogue: str) -> bool:
+    def _contains_evidence_leak(
+        self,
+        session: GameSession,
+        dialogue: str,
+        allowed_evidence_ids: set[str] | None = None,
+    ) -> bool:
+        allowed_evidence_ids = allowed_evidence_ids or set()
         normalized = dialogue.casefold()
-        for evidence in session.evidences.values():
+        for evidence_id, evidence in session.evidences.items():
+            if evidence_id in allowed_evidence_ids:
+                continue
             if evidence.title and evidence.title.casefold() in normalized:
                 return True
             if evidence.content and len(evidence.content) >= 24:
@@ -1822,6 +1992,22 @@ class GameEngine:
                 if content_prefix in normalized:
                     return True
         return False
+
+    def _contains_known_fact_contradiction(self, npc: NPCState, dialogue: str) -> bool:
+        """Reject evidence reactions that explicitly deny canonical NPC facts."""
+
+        normalized = dialogue.casefold()
+        for fact_id in npc.known_fact_ids:
+            patterns = KNOWN_FACT_CONTRADICTION_PATTERNS.get(fact_id, ())
+            if any(re.search(pattern, normalized) for pattern in patterns):
+                return True
+        return False
+
+    def _contains_unavailable_role_reference(self, session: GameSession, dialogue: str) -> bool:
+        if "team_lead" in session.npcs or "teamlead" in session.npcs:
+            return False
+        normalized = dialogue.casefold()
+        return any(re.search(pattern, normalized) for pattern in UNAVAILABLE_ROLE_REFERENCE_PATTERNS)
 
     def _apply_decision(
         self,
@@ -2061,16 +2247,6 @@ class GameEngine:
     def _discover_evidence(self, session: GameSession, evidence_id: str) -> None:
         if evidence_id in session.evidences:
             session.discovered_evidence.add(evidence_id)
-
-    def _evidence_from_text(self, text: str) -> str | None:
-        normalized = text.lower()
-        if "api" in normalized or "스키마" in normalized:
-            return "api_schema_diff"
-        if "일정" in normalized or "timeline" in normalized:
-            return "release_timeline"
-        if "qa" in normalized or "경고" in normalized or "warning" in normalized or "메시지" in normalized:
-            return "qa_warning_message"
-        return None
 
     def _score_report(self, session: GameSession, report: IncidentReportRequest) -> GameResult:
         diagnosis_terms = ("api", "schema", "스키마", "백엔드", "backend", "qa", "검증", "배포")

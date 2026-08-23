@@ -19,6 +19,14 @@ class DecisionContext:
     available_evidence_ids: tuple[str, ...]
     recent_events: tuple[str, ...]
     incident_rules: tuple[str, ...]
+    question_type: str = "none"
+    reference_scope: str = "none"
+    discovered_evidence_ids: tuple[str, ...] = ()
+    referenced_evidence_id: str | None = None
+    referenced_evidence_title: str | None = None
+    referenced_evidence_summary: str | None = None
+    referenced_evidence_content: str | None = None
+    responsibility_map: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -32,6 +40,9 @@ class IntentContext:
     discovered_evidence_ids: tuple[str, ...]
     available_locations: tuple[str, ...]
     available_actions: tuple[str, ...]
+    available_evidences: tuple[str, ...] = ()
+    recent_events: tuple[str, ...] = ()
+    latest_discovered_evidence_id: str | None = None
 
 
 @dataclass(frozen=True)

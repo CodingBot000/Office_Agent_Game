@@ -20,6 +20,8 @@ FACT_DEFINITIONS = [
     FactDefinition(id="business_requested_shorter_schedule", statement="Business stakeholders asked for a shorter schedule.", category="canonical", source_evidence_ids=["release_timeline"]),
     FactDefinition(id="backend_changed_api_schema", statement="Backend Developer changed the API response schema.", category="canonical", source_evidence_ids=["api_schema_diff"]),
     FactDefinition(id="backend_executed_deployment", statement="Backend Developer deployed the release.", category="canonical", source_evidence_ids=["release_timeline"]),
+    FactDefinition(id="backend_owns_release_execution", statement="Backend Developer was responsible for executing the production release.", category="canonical", source_evidence_ids=["release_timeline"]),
+    FactDefinition(id="backend_owns_api_schema_change", statement="Backend Developer owned the API contract change.", category="canonical", source_evidence_ids=["api_schema_diff"]),
     FactDefinition(id="backend_knew_deploy_risk", statement="Backend Developer knew there was deployment risk.", category="canonical", source_evidence_ids=["qa_warning_message"]),
     FactDefinition(id="frontend_received_change_late", statement="Frontend Developer received the API change late.", category="canonical", source_evidence_ids=["api_schema_diff"]),
     FactDefinition(id="frontend_local_check_passed", statement="Frontend Developer's last local check passed.", category="evidence"),
@@ -27,6 +29,8 @@ FACT_DEFINITIONS = [
     FactDefinition(id="qa_sent_warning", statement="QA sent a warning message before deployment.", category="evidence", source_evidence_ids=["qa_warning_message"]),
     FactDefinition(id="warning_recommended_deploy_block", statement="The QA warning recommended blocking deployment.", category="evidence", source_evidence_ids=["qa_warning_message"]),
     FactDefinition(id="qa_has_no_deploy_permission", statement="QA does not have deployment permission.", category="canonical"),
+    FactDefinition(id="qa_owns_verification", statement="QA Engineer was responsible for pre-deployment quality verification and warning.", category="canonical", source_evidence_ids=["qa_warning_message"]),
+    FactDefinition(id="pm_owns_schedule_pressure", statement="PM owned the accelerated release schedule and schedule pressure.", category="canonical", source_evidence_ids=["release_timeline"]),
     FactDefinition(id="team_lead_did_not_confirm_warning", statement="The team lead did not confirm the QA warning before deployment.", category="canonical", source_evidence_ids=["qa_warning_message"]),
     FactDefinition(id="frontend_requests_failed_after_deploy", statement="Frontend requests failed after deployment.", category="canonical", source_evidence_ids=["api_schema_diff"]),
     FactDefinition(id="outage_caused_by_schema_mismatch", statement="The outage was caused by an API schema mismatch.", category="canonical", source_evidence_ids=["api_schema_diff"]),
@@ -34,6 +38,19 @@ FACT_DEFINITIONS = [
 
 FACT_REGISTRY = {fact.id: fact for fact in FACT_DEFINITIONS}
 CANONICAL_TRUTH = [fact.statement for fact in FACT_DEFINITIONS if fact.category == "canonical"]
+
+RESPONSIBILITY_FACT_IDS = [
+    "backend_owns_release_execution",
+    "backend_owns_api_schema_change",
+    "pm_owns_schedule_pressure",
+    "qa_owns_verification",
+]
+
+DEFAULT_EVIDENCE_BY_SOURCE_NPC = {
+    "qa_01": "qa_warning_message",
+    "backend_01": "api_schema_diff",
+    "pm_01": "release_timeline",
+}
 
 LEGACY_FACT_TEXT_TO_ID = {
     "I deployed the release.": "backend_executed_deployment",
@@ -114,7 +131,7 @@ WORLD_OBJECT_DEFINITIONS = [
         destructible=False,
         throw_effect="physical_assault",
         throw_severity=5,
-        throw_impact="split",
+        throw_impact="blink",
     ),
     WorldObjectDefinition(
         id="division_head_person",
@@ -124,7 +141,7 @@ WORLD_OBJECT_DEFINITIONS = [
         destructible=False,
         throw_effect="physical_assault",
         throw_severity=5,
-        throw_impact="split",
+        throw_impact="blink",
     ),
     WorldObjectDefinition(
         id="meeting_room_monitor",
@@ -174,15 +191,25 @@ def build_initial_npcs() -> dict[str, NPCState]:
         "backend_changed_api_schema",
         "business_requested_shorter_schedule",
         "backend_knew_deploy_risk",
+        *RESPONSIBILITY_FACT_IDS,
     ]
-    frontend_fact_ids = ["frontend_received_change_late", "frontend_local_check_passed"]
+    frontend_fact_ids = [
+        "frontend_received_change_late",
+        "frontend_local_check_passed",
+        *RESPONSIBILITY_FACT_IDS,
+    ]
     qa_fact_ids = [
         "qa_found_critical_issue",
         "qa_sent_warning",
         "warning_recommended_deploy_block",
         "qa_has_no_deploy_permission",
+        *RESPONSIBILITY_FACT_IDS,
     ]
-    pm_fact_ids = ["pm_moved_release_date", "business_requested_shorter_schedule"]
+    pm_fact_ids = [
+        "pm_moved_release_date",
+        "business_requested_shorter_schedule",
+        *RESPONSIBILITY_FACT_IDS,
+    ]
     return {
         "backend_01": NPCState(
             id="backend_01",

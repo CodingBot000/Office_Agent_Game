@@ -14,3 +14,15 @@ def test_every_npc_known_fact_id_exists_in_registry() -> None:
         assert npc.known_fact_ids
         assert all(fact_id in FACT_REGISTRY for fact_id in npc.known_fact_ids)
         assert npc.known_facts == [FACT_REGISTRY[fact_id].statement for fact_id in npc.known_fact_ids]
+
+
+def test_every_npc_knows_the_shared_responsibility_map() -> None:
+    responsibility_fact_ids = {
+        "backend_owns_release_execution",
+        "backend_owns_api_schema_change",
+        "pm_owns_schedule_pressure",
+        "qa_owns_verification",
+    }
+
+    for npc in build_initial_npcs().values():
+        assert responsibility_fact_ids.issubset(set(npc.known_fact_ids))

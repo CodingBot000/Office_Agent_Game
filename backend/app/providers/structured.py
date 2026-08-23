@@ -49,6 +49,16 @@ def build_decision_prompt(context: DecisionContext) -> str:
             "npc": context.npc.model_dump(mode="json"),
             "available_facts": context.available_facts,
             "available_evidence_ids": context.available_evidence_ids,
+            "discovered_evidence_ids": context.discovered_evidence_ids,
+            "question_type": context.question_type,
+            "reference_scope": context.reference_scope,
+            "referenced_evidence": {
+                "id": context.referenced_evidence_id,
+                "title": context.referenced_evidence_title,
+                "summary": context.referenced_evidence_summary,
+                "content": context.referenced_evidence_content,
+            },
+            "responsibility_map": context.responsibility_map,
             "recent_events": context.recent_events,
             "incident_rules": context.incident_rules,
         },
@@ -72,11 +82,23 @@ Rules:
   private canonical knowledge unless the supporting Fact ID is also in available_facts.
 - Keep action_type within this vocabulary: dialogue, show_evidence, belief_update.
 - action_target must be null or one of the supplied NPC/evidence IDs.
-- When mode is talk or ask, do not disclose evidence titles, evidence content, exact error names,
-  stack traces, or protected warning text. Give a short progress summary and ask the player to
-  request the evidence explicitly if they want the details.
+- When mode is talk or ask and question_type is not evidence_followup, do not disclose evidence
+  content, exact error names, stack traces, or protected warning text. Give a short progress summary.
+- When question_type=evidence_followup, explain only referenced_evidence. The backend supplies its
+  content only after verifying that the Player already discovered it. Do not ask the Player to
+  request that same evidence again.
 - When mode is show_evidence, acknowledge the supplied evidence and reaction policy.
   Do not invent evidence content, additional actors, or unsupported consequences.
+  Never deny or contradict a supplied known fact. If the known facts say that a
+  release was deployed or an API schema was changed, acknowledge that fact even
+  when the NPC is apologizing or explaining the decision.
+- When question_type=responsibility_routing, answer from responsibility_map and include supporting
+  responsibility Fact IDs in knowledge_refs. Distinguish deployment execution, API contract changes,
+  schedule pressure, and QA verification. Do not answer that the NPC cannot identify the owner.
+- Team Lead is a background approval fact, not an available NPC in this game.
+  Never tell the player to find or contact Team Lead. Route schedule and
+  approval questions to PM / Planner and technical execution questions to
+  Backend Developer.
 - Use the NPC's personality, dynamic state, beliefs, relationships, and memories.
 - Keep dialogue short, natural, and grounded only in the supplied context.
 
@@ -92,8 +114,12 @@ def build_intent_prompt(context: IntentContext) -> str:
             "current_location": context.current_location,
             "target_hint": context.target_hint,
             "available_npcs": context.available_npcs,
+            "available_npc_ids": context.available_npc_ids,
             "available_evidence_ids": context.available_evidence_ids,
             "discovered_evidence_ids": context.discovered_evidence_ids,
+            "available_evidences": context.available_evidences,
+            "recent_events": context.recent_events,
+            "latest_discovered_evidence_id": context.latest_discovered_evidence_id,
             "available_locations": context.available_locations,
             "available_actions": context.available_actions,
         },
@@ -107,6 +133,16 @@ Markdown, explanations, hidden reasoning, or chain-of-thought.
 
 Rules:
 - Infer meaning, not just exact keywords.
+- Set question_type to the semantic purpose of the message. Use none for commands with no question.
+- Set reference_scope=explicit when the message directly identifies evidence. Use latest_discovered
+  or conversation_context when pronouns or conversational references point to evidence already shown.
+- Use question_type=evidence_followup with intent=ask when the Player asks for meaning, importance,
+  cause, or explanation of already discovered evidence. Resolve evidence_id from discovered evidence
+  and recent_events. Do not classify it as a new evidence request.
+- Use question_type=responsibility_routing with intent=ask when the Player asks who owns, performed,
+  approved, or should be contacted about work. This is semantic classification, not keyword matching.
+- Use question_type=approval_process for questions about release schedule or approval flow and
+  cause_analysis for questions about why the incident happened.
 - Set interaction_kind=game_action_attempt for physical/object operations such as picking up, breaking,
   dropping, or throwing an office object. Set game_action_family when this applies.
 - Natural-language game_action_attempts are never executed by the server; the UI must use the supplied buttons.
@@ -115,6 +151,8 @@ Rules:
 - Use only the supplied IDs for target_npc_id and evidence_id.
 - request_evidence means the Player asks an NPC to reveal evidence to the Player. Requests such as
   "show me the warning" or "can you show the message?" are request_evidence.
+- request_evidence must use question_type=evidence_request and evidence_id should identify the
+  requested evidence when the supplied registry makes that possible.
 - Questions asking for the concrete issue, error name, error message, critical issue details, or
   exact warning should be request_evidence when a matching evidence record exists.
 - show_evidence means the Player presents evidence they already possess to an NPC. Only choose it

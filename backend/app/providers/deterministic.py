@@ -1,4 +1,5 @@
 from app.models import AgentDecision, IntentClassification, Memory, SocialImpactClassification
+from app.game.seed import RESPONSIBILITY_FACT_IDS
 from app.providers.base import (
     AgentProvider,
     DecisionContext,
@@ -10,6 +11,29 @@ from app.providers.base import (
 )
 
 
+RESPONSIBILITY_QUESTION_TERMS = (
+    "책임자",
+    "담당자",
+    "배포 담당",
+    "누가 배포",
+    "누구 책임",
+    "누구에게 물어",
+    "누구한테 물어",
+    "어디에 물어",
+    "owner",
+    "responsible",
+    "who deployed",
+    "who owns",
+)
+
+
+def is_responsibility_question(text: str) -> bool:
+    normalized = text.casefold()
+    if any(term in normalized for term in ("책임자라고", "책임을 묻", "비난", "탓한다", "탓하")):
+        return False
+    return any(term in normalized for term in RESPONSIBILITY_QUESTION_TERMS)
+
+
 class DeterministicIntentProvider:
     """Keyword fallback used only when the semantic intent provider fails."""
 
@@ -19,6 +43,14 @@ class DeterministicIntentProvider:
     def classify(self, context: IntentContext) -> IntentClassification:
         normalized = context.player_input.strip().lower()
         target_npc_id = context.target_hint or self._resolve_target(normalized)
+
+        if is_responsibility_question(normalized):
+            return self._result(
+                "ask",
+                target_npc_id,
+                0.98,
+                question_type="responsibility_routing",
+            )
 
         game_action_family = self._resolve_game_action_family(normalized)
         if game_action_family is not None:
@@ -82,20 +114,59 @@ class DeterministicIntentProvider:
             )
         ):
             if any(keyword in normalized for keyword in ("보여", "보여줘", "보여줄", "확인", "요청", "알려")):
-                return self._result("request_evidence", target_npc_id, 0.8, self._resolve_evidence(normalized))
+                return self._result(
+                    "request_evidence",
+                    target_npc_id,
+                    0.8,
+                    self._resolve_evidence(normalized),
+                    question_type="evidence_request",
+                    reference_scope="explicit",
+                )
             if any(keyword in normalized for keyword in ("제시", "전달", "공개", "backend", "백엔드")):
-                return self._result("show_evidence", target_npc_id, 0.8, self._resolve_evidence(normalized))
-            return self._result("inspect", target_npc_id, 0.8, self._resolve_evidence(normalized))
+                return self._result(
+                    "show_evidence",
+                    target_npc_id,
+                    0.8,
+                    self._resolve_evidence(normalized),
+                    reference_scope="explicit",
+                )
+            return self._result(
+                "inspect",
+                target_npc_id,
+                0.8,
+                self._resolve_evidence(normalized),
+                question_type="evidence_request",
+                reference_scope="explicit",
+            )
         if any(keyword in normalized for keyword in ("회의", "모두", "summon")):
             return self._result("summon_meeting", target_npc_id, 0.8, location="meeting_room")
         if any(keyword in normalized for keyword in ("롤백", "rollback", "배포 중단")):
             return self._result("order", target_npc_id, 0.8)
         if any(keyword in normalized for keyword in ("옹호", "두둔", "잘못이 아니", "책임이 없", "defend")):
             return self._result("defend", target_npc_id, 0.8)
+        latest_evidence_id = context.latest_discovered_evidence_id
+        if latest_evidence_id and any(
+            keyword in normalized
+            for keyword in ("이게", "이거", "이 증거", "이 메시지", "이 내용", "무슨 뜻", "왜 중요", "설명해", "자세히")
+        ):
+            return self._result(
+                "ask",
+                target_npc_id,
+                0.85,
+                latest_evidence_id,
+                question_type="evidence_followup",
+                reference_scope="latest_discovered",
+            )
+        if any(keyword in normalized for keyword in ("승인", "일정", "릴리스 절차", "배포 절차")):
+            return self._result("ask", target_npc_id, 0.8, question_type="approval_process")
+        if any(keyword in normalized for keyword in ("원인", "왜 발생", "왜 장애", "사고 이유")) and any(
+            keyword in normalized for keyword in ("누구", "무엇", "뭐", "왜", "설명", "알려")
+        ):
+            return self._result("ask", target_npc_id, 0.82, question_type="cause_analysis")
         if any(keyword in normalized for keyword in ("책임", "원인", "잘못", "비난", "accuse", "뒤집어")):
             return self._result("accuse", target_npc_id, 0.8)
         if any(keyword in normalized for keyword in ("묻", "질문", "알고", "무엇", "왜", "뭐야", "뭐가", "무슨", "알려", "설명", "말해", "궁금", "ask", "question")):
-            return self._result("ask", target_npc_id, 0.75)
+            return self._result("ask", target_npc_id, 0.75, question_type="general_status")
         if any(keyword in normalized for keyword in ("이동", "move", "자리", "회의실로")):
             return self._result("move", target_npc_id, 0.8, location=self._resolve_location(normalized))
         return self._result("talk", target_npc_id, 0.35)
@@ -109,11 +180,15 @@ class DeterministicIntentProvider:
         location: str | None = None,
         interaction_kind: str = "dialogue",
         game_action_family: str | None = None,
+        question_type: str = "none",
+        reference_scope: str = "none",
     ) -> IntentClassification:
         return IntentClassification(
             intent=intent,  # type: ignore[arg-type]
             interaction_kind=interaction_kind,  # type: ignore[arg-type]
             game_action_family=game_action_family,  # type: ignore[arg-type]
+            question_type=question_type,  # type: ignore[arg-type]
+            reference_scope=reference_scope,  # type: ignore[arg-type]
             target_npc_id=target_npc_id,
             evidence_id=evidence_id,
             location=location,  # type: ignore[arg-type]
@@ -169,6 +244,35 @@ class DeterministicDecisionProvider:
 
     def decide(self, context: DecisionContext) -> AgentDecision:
         npc = context.npc
+        if context.question_type == "evidence_followup":
+            explanation_by_id = {
+                "qa_warning_message": (
+                    "이 경고는 production-like 테스트에서 API response mismatch를 발견했고, "
+                    "계약 검증 전까지 배포를 막으라고 권고한 내용입니다."
+                ),
+                "api_schema_diff": (
+                    "이 기록은 response.data.items가 response.payload.items로 바뀌었지만 "
+                    "Frontend 반영이 같은 릴리스에 포함되지 않았다는 뜻입니다."
+                ),
+                "release_timeline": (
+                    "이 기록은 일정이 하루 앞당겨졌고, 16:40 QA 경고 후 17:00에 Production 배포가 시작됐다는 뜻입니다."
+                ),
+            }
+            dialogue = explanation_by_id.get(
+                context.referenced_evidence_id or "",
+                "이미 확보한 증거의 내용과 사건 기록을 함께 확인해 보겠습니다.",
+            )
+            return AgentDecision(
+                npc_id=npc.id,
+                emotion=npc.dynamic_state.emotion,
+                stress_delta=0,
+                trust_delta=0,
+                cooperation_delta=0,
+                grounding_type="acknowledgement",
+                action_type="dialogue",
+                dialogue=dialogue,
+            )
+
         if context.mode == "talk":
             dialogue_by_npc = {
                 "qa_01": "현재 장애 원인을 확인하려면 배포 전 경고와 승인 과정을 먼저 살펴봐야 합니다.",
@@ -188,7 +292,27 @@ class DeterministicDecisionProvider:
             )
 
         if context.mode == "ask":
-            if npc.id == "qa_01":
+            if context.question_type == "responsibility_routing":
+                dialogue_by_npc = {
+                    "qa_01": (
+                        "저는 배포 권한이 없습니다. 실제 릴리스 배포와 API 계약 변경은 Backend Developer가 담당했습니다. "
+                        "배포 실행과 API 변경은 Backend Developer에게, 일정과 승인 경위는 PM에게 확인해 주세요."
+                    ),
+                    "backend_01": (
+                        "실제 배포 실행과 API 계약 변경은 제가 담당했습니다. "
+                        "QA 경고와 일정 압박이 있었던 당시의 판단 경위를 설명드리겠습니다."
+                    ),
+                    "frontend_01": (
+                        "API 계약 변경과 배포 실행은 Backend Developer에게 확인해 주세요. "
+                        "저는 변경사항을 늦게 전달받았고 마지막 로컬 검증은 통과했습니다."
+                    ),
+                    "pm_01": (
+                        "실제 Production 배포와 API 계약 변경은 Backend Developer가 담당했습니다. "
+                        "저는 릴리스 일정이 앞당겨진 경위와 일정 압박을 설명하겠습니다."
+                    ),
+                }
+                dialogue = dialogue_by_npc.get(npc.id, "Backend Developer에게 배포 실행과 API 변경을 확인해 주세요.")
+            elif npc.id == "qa_01":
                 dialogue = "배포 전 검증 로그와 API 응답을 대조하고 있습니다. 정확한 내용은 증거를 요청하시면 공유하겠습니다."
             elif npc.id == "backend_01":
                 dialogue = "API 응답 스키마를 바꿨습니다. 일정이 촉박했지만 배포는 진행해야 한다고 판단했습니다."
@@ -202,7 +326,11 @@ class DeterministicDecisionProvider:
                 stress_delta=0,
                 trust_delta=0,
                 cooperation_delta=0,
-                knowledge_refs=list(npc.known_fact_ids),
+                knowledge_refs=(
+                    [fact_id for fact_id in RESPONSIBILITY_FACT_IDS if fact_id in npc.known_fact_ids]
+                    if context.question_type == "responsibility_routing"
+                    else list(npc.known_fact_ids)
+                ),
                 action_type="dialogue",
                 dialogue=dialogue,
             )
@@ -213,7 +341,7 @@ class DeterministicDecisionProvider:
             elif "same_source_acknowledgement" in context.player_input:
                 dialogue = "이 메시지는 제가 보낸 경고입니다. 이미 알고 있는 내용이니, 어떻게 처리됐는지 확인해 주세요."
             elif npc.id == "backend_01":
-                dialogue = "QA 경고가 있었던 것은 확인했습니다. 당시 배포 판단 과정을 다시 검토하겠습니다."
+                dialogue = "QA 경고가 있었던 것은 확인했습니다. 제가 API 응답 스키마를 변경한 상태에서 배포를 진행했고, 당시 판단 과정을 다시 검토하겠습니다."
             elif npc.id == "frontend_01":
                 dialogue = "QA 경고와 API 변경 내용을 함께 확인해 보겠습니다. 프론트엔드 반영 시점도 다시 점검하겠습니다."
             elif npc.id == "pm_01":
