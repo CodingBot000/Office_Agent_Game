@@ -21,8 +21,13 @@ __pycache__/
 .idea/
 .vscode/
 
-# The planning documents are local working notes and must not be committed.
-docs/
+# Planning documents are local working notes. Resume/portfolio documents are shareable.
+docs/*
+!docs/resume/
+!docs/resume/**
+
+# Deployment runbooks may contain operational infrastructure details.
+deploy/
 
 # Tool caches
 .vite/
