@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
+import { formatWorldObjectName, GameActionLabel } from "./display";
 import { ModeChooser, VisualOffice } from "./VisualOffice";
 import type {
   AvailableGameAction,
@@ -573,7 +574,10 @@ function App() {
                       return item ? (
                         <div className="world-object-row" key={item.id}>
                           <span className="object-condition held">HELD</span>
-                          <div><strong>{item.name}</strong><small>{item.id} · owner {item.owner_id ?? "shared"}</small></div>
+                          <div>
+                            <strong className="world-object-name">{formatWorldObjectName(item.name)}</strong>
+                            <small><span className="world-object-id">{item.id}</span> · <span className="world-object-owner">owner {item.owner_id ?? "shared"}</span></small>
+                          </div>
                         </div>
                       ) : null;
                     })
@@ -590,7 +594,10 @@ function App() {
                       <span className={`object-condition ${item.holder_id === "player" ? "held" : item.condition}`}>
                         {item.holder_id === "player" ? "HELD BY PLAYER" : item.condition}
                       </span>
-                      <div><strong>{item.name}</strong><small>{item.id} · {item.location}</small></div>
+                      <div>
+                        <strong className="world-object-name">{formatWorldObjectName(item.name)}</strong>
+                        <small><span className="world-object-id">{item.id}</span> · <span className="world-object-location">{item.location}</span></small>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -847,7 +854,7 @@ function GameActionGroup({
           title={action.disabled_reason ?? action.id}
           onClick={() => onAction(action)}
         >
-          <span>{action.label}</span>
+          <span><GameActionLabel action={action} /></span>
           <small>{action.scope.replaceAll("_", " ")} · {action.family.replaceAll("_", " ")}</small>
         </button>
       ))}

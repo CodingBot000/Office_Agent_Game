@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { formatWorldObjectName, GameActionLabel } from "./display";
 import type { AvailableGameAction, GameSnapshot, NPCState } from "./types";
 
 export type VisualMode = "dialogue" | "visual";
@@ -536,7 +537,7 @@ export function VisualOffice({
                     <div className="player-action-list">
                       {throwObjectIds.map((objectId) => {
                         const worldObject = snapshot.world_objects.find((item) => item.id === objectId);
-                        return <button key={objectId} type="button" onClick={() => setSelectedThrowObjectId(objectId)}>{worldObject?.name ?? objectId} 던지기</button>;
+                        return <button key={objectId} type="button" onClick={() => setSelectedThrowObjectId(objectId)}><span className="player-action-item-name">{worldObject ? formatWorldObjectName(worldObject.name) : objectId}</span> 던지기</button>;
                       })}
                     </div>
                   ) : (
@@ -637,7 +638,7 @@ export function VisualOffice({
             {inventoryOpen && (
               <div className="visual-inventory-content">
                 <span className="inventory-label">PLAYER HAND</span>
-                {heldObject ? <p className="inventory-held">{heldObject.name}<small>{heldObject.condition}</small></p> : <p className="inventory-empty">Hands are empty.</p>}
+                {heldObject ? <p className="inventory-held"><span className="inventory-held-name">{formatWorldObjectName(heldObject.name)}</span><small>{heldObject.condition}</small></p> : <p className="inventory-empty">Hands are empty.</p>}
                 <span className="inventory-label">EVIDENCE</span>
                 <p className="inventory-evidence-count">{snapshot.evidences.filter((evidence) => evidence.discovered).length} / {snapshot.evidences.length} discovered</p>
               </div>
@@ -709,7 +710,7 @@ function WorldActionGroup({
           title={action.disabled_reason ?? action.id}
           onClick={() => onAction(action)}
         >
-          {action.label}
+          <GameActionLabel action={action} />
         </button>
       ))}
     </section>

@@ -143,6 +143,7 @@ h1, h2, p { margin: 0; }
 .game-action-button:hover { border-color: var(--cyan); background: #1b3440; }
 .game-action-button:disabled { cursor: not-allowed; opacity: .45; }
 .game-action-button span { font-size: 10px; }
+.game-action-object-name { color: var(--amber); font-weight: 600; letter-spacing: .01em; }
 .game-action-button small { color: var(--faint); font: 8px var(--mono); text-transform: uppercase; }
 .game-action-empty { margin-top: 9px; color: var(--faint); font: 9px var(--mono); }
 .command-form { display: flex; align-items: center; gap: 11px; padding: 4px 5px 4px 12px; border: 1px solid var(--line-bright); background: rgba(15, 25, 34, .82); }
@@ -184,7 +185,10 @@ h1, h2, p { margin: 0; }
 .world-object-list { display: grid; gap: 8px; }
 .world-object-row { display: grid; grid-template-columns: 58px 1fr; gap: 8px; align-items: start; }
 .world-object-row strong { display: block; color: var(--text); font-size: 10px; font-weight: 500; }
+.world-object-row .world-object-name { color: var(--cyan); font-family: var(--mono); letter-spacing: .01em; }
 .world-object-row small { display: block; margin-top: 3px; color: var(--faint); font: 8px var(--mono); }
+.world-object-row .world-object-owner { color: var(--amber); }
+.world-object-row .world-object-id, .world-object-row .world-object-location { color: var(--faint); }
 .object-condition { padding: 4px 5px; border: 1px solid var(--line-bright); color: var(--green); text-align: center; font: 8px var(--mono); text-transform: uppercase; }
 .object-condition.damaged { color: var(--amber); border-color: #7c633d; }
 .object-condition.destroyed { color: var(--red); border-color: #82423e; }
@@ -472,7 +476,8 @@ h1, h2, p { margin: 0; }
 .visual-inventory-content { display: grid; gap: 7px; padding: 12px 13px 13px; }
 .inventory-label { color: var(--faint); font: 500 8px var(--mono); letter-spacing: .08em; }
 .inventory-held, .inventory-empty, .inventory-evidence-count { margin: 0 0 5px; color: var(--text); font-size: 10px; }
-.inventory-held small { display: block; margin-top: 3px; color: var(--cyan); font: 8px var(--mono); text-transform: uppercase; }
+.inventory-held-name { color: var(--cyan); font-family: var(--mono); letter-spacing: .01em; }
+.inventory-held small { display: block; margin-top: 3px; color: var(--faint); font: 8px var(--mono); text-transform: uppercase; }
 .inventory-empty { color: var(--faint); }
 .inventory-evidence-count { color: var(--amber); font: 500 10px var(--mono); }
 .visual-event-toast { padding: 11px 13px; border-left: 2px solid var(--green); background: rgba(116,213,160,.06); }
@@ -512,6 +517,7 @@ h1, h2, p { margin: 0; }
 .player-action-list { max-height: 182px; display: grid; gap: 5px; overflow-y: auto; padding: 8px; }
 .player-action-list button { width: 100%; border: 1px solid var(--line-bright); background: var(--panel-soft); color: var(--cyan); padding: 7px 8px; cursor: pointer; text-align: left; font: 9px var(--mono); line-height: 1.35; }
 .player-action-list button:hover { border-color: var(--cyan); background: rgba(86,215,233,.12); }
+.player-action-item-name { color: var(--amber); font-weight: 600; letter-spacing: .01em; }
 .player-action-list button:disabled { opacity: .5; cursor: wait; }
 .player-action-list .player-action-back { color: var(--faint); }
 
