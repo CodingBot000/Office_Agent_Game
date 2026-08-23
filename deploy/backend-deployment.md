@@ -19,6 +19,16 @@ https://api.heartsignal.cloud/office-agent-backend/docs
 
 기존 Tarot 서비스가 사용하는 `api.heartsignal.cloud`에 path routing으로 추가했다. 별도 Cloudflare 도메인이나 DNS 레코드는 만들지 않았다.
 
+Frontend는 Vercel Production에 별도로 배포한다.
+
+```text
+Frontend:
+https://office-agent-frontend.vercel.app
+
+Backend API:
+https://api.heartsignal.cloud/office-agent-backend
+```
+
 ## 2. AWS 인스턴스
 
 ```text
@@ -171,8 +181,9 @@ Tarot containers: 계속 실행 중
 
 - `3c8c823 chore: add office agent backend deployment config`
 - `77882ab chore: add office agent path proxy config`
+- `0cf8ff8 feat: configure frontend production api base url`
 
-현재 Repository `main`과 `origin/main`은 `77882ab`로 동기화되어 있다.
+이 문서의 최신 커밋 이후 `main`과 `origin/main`의 동기화 상태를 확인한다.
 
 ## 9. 주의사항
 
@@ -183,3 +194,50 @@ Tarot containers: 계속 실행 중
 - Nginx 설정 변경 후 반드시 `sudo nginx -t`를 먼저 실행한다.
 - 현재 Lightsail 인스턴스는 2GB RAM이므로 메모리 사용량을 주기적으로 확인한다.
 - SQLite는 단일 플레이 기준이며 동일 세션 동시 요청에는 마지막 write 문제가 남아 있다.
+
+## 10. Frontend Vercel 배포
+
+```text
+Vercel project: office-agent-frontend
+Vercel scope: miracle3days-projects
+Production URL: https://office-agent-frontend.vercel.app
+API base URL: https://api.heartsignal.cloud/office-agent-backend
+```
+
+Frontend는 `VITE_API_BASE_URL`을 기준으로 API를 호출한다.
+
+```text
+Local:
+VITE_API_BASE_URL 비어 있음
+  -> Vite proxy로 http://127.0.0.1:8000/api
+
+Vercel Production:
+VITE_API_BASE_URL=https://api.heartsignal.cloud/office-agent-backend
+```
+
+Production 환경변수 설정:
+
+```bash
+cd frontend
+vercel env add VITE_API_BASE_URL production
+vercel deploy --prod --yes
+```
+
+Cloudflare custom domain은 사용하지 않는다. `office-agent.heartsignal.cloud`는 현재 운영 URL이 아니며 DNS 레코드도 만들지 않았다. 사용자는 Vercel 기본 Production URL로 접속한다.
+
+Backend 원격 CORS에는 다음 origin이 등록되어 있다.
+
+```text
+https://office-agent-frontend.vercel.app
+https://office-agent.heartsignal.cloud
+```
+
+실제 Vercel Production 검증:
+
+```text
+Landing page: 정상
+Dialogue Mode: 정상
+Backend session 생성: 정상
+AI provider 표시: openai / gpt-5.4-nano
+Browser console errors: 0
+```
