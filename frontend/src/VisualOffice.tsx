@@ -44,7 +44,10 @@ type ThrowPresentation = {
 
 const OFFICE_ASSET_BASE = "/office-assets";
 const WORLD_BOUNDS = { minX: -10.25, maxX: 10.25, minY: -6.25, maxY: 6.25 };
-const PLAYER_RADIUS = 0.45;
+const CHARACTER_SCALE = 1.2;
+const BASE_WORLD_CHARACTER_SIZE = 2.1;
+const WORLD_CHARACTER_SIZE = BASE_WORLD_CHARACTER_SIZE * CHARACTER_SCALE;
+const PLAYER_RADIUS = 0.45 * CHARACTER_SCALE;
 const PLAYER_SPEED = 4;
 const INTERACTION_DISTANCE = 2.25;
 
@@ -497,7 +500,7 @@ export function VisualOffice({
                     className={`world-character-button ${isSelected ? "selected" : ""} ${isNearby ? "nearby" : ""} ${isComatose ? "fallen" : ""} ${isFearOrShock(npc.dynamic_state.emotion) ? "shaking" : ""}`}
                     key={npc.id}
                     type="button"
-                    style={worldPointStyle(layout.point, 2.1)}
+                    style={worldPointStyle(layout.point, WORLD_CHARACTER_SIZE)}
                     onClick={() => selectNpc(npc.id)}
                     aria-label={`${npc.name} 선택`}
                     disabled={false}
@@ -535,7 +538,7 @@ export function VisualOffice({
                 </div>
               )}
 
-              <div className="world-player" style={worldPointStyle(playerPosition, 2.35)}>
+              <div className="world-player" style={worldPointStyle(playerPosition, WORLD_CHARACTER_SIZE)}>
                 <CharacterSprite asset={`${OFFICE_ASSET_BASE}/characters/player.png`} direction={playerDirection} />
                 <span className="world-character-label">PLAYER</span>
               </div>
