@@ -365,7 +365,7 @@ export function VisualOffice({
   const startThrowAnimation = (action: AvailableGameAction) => {
     if (!action.target_id || !action.object_id) return;
     const object = snapshot.world_objects.find((worldObject) => worldObject.id === action.object_id);
-    const impact = action.object_id === "team_leader_person" || action.object_id === "division_head_person"
+    const impact = isPersonObjectId(action.object_id)
       ? "blink"
       : object?.throw_impact ?? (object?.throw_effect === "support" ? "blink" : "split");
     const targetId = action.target_id;
@@ -581,8 +581,8 @@ export function VisualOffice({
                 const targetStyle = worldPointStyle(target, 1.2) as React.CSSProperties & Record<string, string>;
                 const isPersonThrow = isPersonObjectId(throwAnimation.objectId);
                 const throwDirection: RunDirection = target.x >= playerPosition.x ? "right" : "left";
-                const throwWidth = isPersonThrow ? 2.1 : 1.25;
-                const impactWidth = isPersonThrow ? 2.1 : 1.5;
+                const throwWidth = isPersonThrow ? WORLD_CHARACTER_SIZE : 1.25;
+                const impactWidth = isPersonThrow ? WORLD_CHARACTER_SIZE : 1.5;
                 return throwAnimation.phase === "flying" ? (
                   <div
                     className={`thrown-world-object${isPersonThrow ? " thrown-person-object" : ""}`}
@@ -595,7 +595,7 @@ export function VisualOffice({
                     <WorldObjectVisual objectId={throwAnimation.objectId} runDirection={isPersonThrow ? throwDirection : undefined} />
                   </div>
                 ) : (
-                  throwAnimation.impact === "blink" ? (
+                  isPersonThrow || throwAnimation.impact === "blink" ? (
                     <div className="world-blink-effect" style={worldPointStyle(target, impactWidth)} aria-label="긍정 아이템 점멸 효과">
                       <WorldObjectVisual objectId={throwAnimation.objectId} />
                     </div>
