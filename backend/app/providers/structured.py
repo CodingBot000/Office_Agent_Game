@@ -80,6 +80,7 @@ def build_decision_prompt(context: DecisionContext) -> str:
             },
             "responsibility_map": context.responsibility_map,
             "visible_evidences": [evidence.model_dump(mode="json") for evidence in context.visible_evidences],
+            "shareable_evidences": [evidence.model_dump(mode="json") for evidence in context.shareable_evidences],
             "available_npcs": context.available_npcs,
             "social_classification": context.social_classification.model_dump(mode="json") if context.social_classification else None,
             "social_outcome": context.social_outcome.model_dump(mode="json") if context.social_outcome else None,
@@ -98,7 +99,8 @@ explanations, hidden reasoning, or chain-of-thought.
 Rules:
 - The backend is the world authority. Never invent NPCs, evidence, facts, or state changes.
 - Treat known_facts as known, beliefs as uncertain beliefs, and everything else as UNKNOWN.
-- grounding_type=fact when dialogue asserts an incident/world fact; those decisions require supporting knowledge_refs.
+- grounding_type=fact when dialogue asserts an incident/world fact; those decisions require supporting
+  knowledge_refs and/or evidence_refs.
 - grounding_type=belief for subjective interpretation and grounding_type=acknowledgement for a short confirmation
   of a message or evidence already visible in recent_events. Belief/acknowledgement may use empty knowledge_refs.
 - knowledge_refs must contain only Fact IDs from available_facts that support factual dialogue claims.
@@ -110,8 +112,17 @@ Rules:
 - visible_evidences contains documents both the NPC and Player can access. Explain and compare those
   documents across all question types. Never disclose another document's private content.
   Mentioning a public document title alone is not a disclosure of its contents.
-- Cite document claims in evidence_refs using visible_evidences IDs. When referring to a known fact,
+- Cite document claims in evidence_refs using visible_evidences IDs or the document being disclosed
+  by this decision's show_evidence action. When referring to a known fact,
   also include its supporting ID in knowledge_refs. Do not ask for evidence already visible here.
+- shareable_evidences contains documents the current NPC can access and is allowed to disclose, but
+  which may not be in the Player's inventory yet. Decide from the current question and recent dialogue
+  whether sharing a relevant document is a natural, grounded response. When it is, return
+  action_type=show_evidence, action_target=that document ID and cite it in evidence_refs. Otherwise
+  keep action_type=dialogue. Do not require a magic phrase, a fixed turn count, or an exact keyword.
+  A request for deeper detail after the NPC has mentioned an observation should consult relevant
+  shareable evidence instead of falsely claiming ignorance. Greetings and unrelated questions do not
+  justify disclosure. Never disclose a document owned by another NPC unless it is supplied here.
 - When mode is show_evidence, acknowledge the supplied evidence and reaction policy.
   Do not invent evidence content, additional actors, or unsupported consequences.
   Never deny or contradict a supplied known fact. If the known facts say that a
@@ -123,6 +134,9 @@ Rules:
 - When suggesting someone to contact, put their actual available NPC ID in contact_npc_ids.
   Do not invent a contact. Background or negated mentions of roles need no contact entry.
   Route questions using available_npcs and responsibility_map, not assumed roles.
+- Internal IDs belong only in structured fields such as npc_id, action_target, contact_npc_ids,
+  knowledge_refs and evidence_refs. In dialogue, use display_name from available_npcs and natural
+  document titles. Never append an internal ID in parentheses, brackets or code formatting.
 - Use the NPC's personality, dynamic state, beliefs, relationships, and memories.
 - In social_reaction mode, social_outcome has ALREADY been applied by the server. Express the NPC's
   reaction to the actual player_input using their personality, memories and current state.
@@ -196,9 +210,10 @@ Rules:
   "show me the warning" or "can you show the message?" are request_evidence.
 - request_evidence must use question_type=evidence_request and evidence_id should identify the
   requested evidence when the supplied registry makes that possible.
-- Requests for a specific record's exact error text or warning can be request_evidence. A general
-  question about a problem or issue is NOT a request for a document just because its topic matches
-  an evidence record. When no document/content transfer is requested, keep the normal ask/talk intent.
+- Classify request_evidence only when the Player is asking the NPC to transfer or show a record.
+  Questions seeking more explanation or technical detail remain ask; the NPC decision stage may
+  choose to disclose relevant shareable evidence from the conversation context. Do not infer this
+  action from error, issue, warning, or other topic words alone.
 - show_evidence means the Player presents evidence they already possess to an NPC. Only choose it
   when evidence_id is present in discovered_evidence_ids.
 - Use location only for move or summon_meeting intents.

@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.game.session import GameSession
 from app.game.session_codec import CURRENT_SESSION_SCHEMA_VERSION, serialize_session, deserialize_session, migrate_session_payload
 from app.game.events import append_event
+from app.game.dialogue_text import render_entity_references
 from app.game.conversation import build_decision_context, validate_decision, contains_evidence_leak, contains_known_fact_contradiction
 from app.game.social_state import (recovery_transition_valid, npc_ids_at_location, derive_witnesses,
                                    is_repeated_social_action, validate_social_outcome, apply_social_outcome)
@@ -1274,6 +1275,7 @@ class GameEngine:
             provider_fallback,
         )
         self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
+        self._publish_npc_evidence(session, npc, applied_decision)
         return applied_decision.dialogue
 
     def _ask_npc(
@@ -1300,6 +1302,7 @@ class GameEngine:
             provider_fallback,
         )
         self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
+        self._publish_npc_evidence(session, npc, applied_decision)
         return applied_decision.dialogue
 
     def _accuse_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
@@ -1320,12 +1323,7 @@ class GameEngine:
             provider_fallback,
         )
         self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
-        if applied_decision.action_type == "show_evidence" and applied_decision.action_target:
-            self._discover_evidence(session, applied_decision.action_target)
-            evidence = session.evidences.get(applied_decision.action_target)
-            if evidence is not None:
-                self._append_event(session, npc.name, f"{evidence.title}를 공개했습니다.", "evidence", npc.id,
-                                   evidence_id=evidence.id, evidence_operation="discovered")
+        self._publish_npc_evidence(session, npc, applied_decision)
         return applied_decision.dialogue
 
     def _defend_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
@@ -1346,6 +1344,7 @@ class GameEngine:
             provider_fallback,
         )
         self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
+        self._publish_npc_evidence(session, npc, applied_decision)
         return applied_decision.dialogue
 
     def _check_npc_response(self, session: GameSession, npc: NPCState) -> str | None:
@@ -1380,8 +1379,11 @@ class GameEngine:
                 self._record_fallback(session, "decision_guardrail", self.provider.name,
                                       "Social narration attempted state changes or contradicted the required response kind.")
                 return self.fallback_provider.decide(context), True
-            allowed_evidence_ids = visible_ids
-            if mode in {"talk", "ask", "social_reaction"} and contains_evidence_leak(
+            allowed_evidence_ids = set(visible_ids)
+            if (decision.action_type == "show_evidence" and decision.action_target is not None
+                    and can_provide_evidence(session, npc, decision.action_target)):
+                allowed_evidence_ids.add(decision.action_target)
+            if mode in {"talk", "ask", "accuse", "defend", "social_reaction"} and contains_evidence_leak(
                 session,
                 decision.dialogue,
                 allowed_evidence_ids,
@@ -1456,6 +1458,9 @@ class GameEngine:
             guardrails = checks
             fallback_used = False
 
+        trace_decision = trace_decision.model_copy(
+            update={"dialogue": render_entity_references(trace_decision.dialogue, self._dialogue_labels(session))}
+        )
         npc.dynamic_state = self._bounded_dynamic_state(npc.dynamic_state, trace_decision)
         change_relationship(session, npc.id, "player", trust_delta=trace_decision.trust_delta)
         for belief in trace_decision.belief_updates:
@@ -1492,6 +1497,30 @@ class GameEngine:
             )
         )
         return trace_decision
+
+    def _dialogue_labels(self, session: GameSession) -> dict[str, str]:
+        labels = {npc_id: npc.name for npc_id, npc in session.npcs.items()}
+        labels.update({evidence_id: evidence.title for evidence_id, evidence in session.evidences.items()})
+        labels.update({object_id: state.name for object_id, state in session.world_objects.items()})
+        labels.update(LOCATION_LABELS)
+        # Fact citations are metadata, never a reason to inject private fact text.
+        labels.update(dict.fromkeys(FACT_REGISTRY, ""))
+        labels["player"] = "Player"
+        return labels
+
+    def _publish_npc_evidence(self, session: GameSession, npc: NPCState, decision: AgentDecision) -> None:
+        evidence_id = decision.action_target
+        if (decision.action_type != "show_evidence" or evidence_id is None
+                or evidence_id in session.discovered_evidence or not can_provide_evidence(session, npc, evidence_id)):
+            return
+        evidence = session.evidences[evidence_id]
+        self._discover_evidence(session, evidence_id)
+        self._append_event(
+            session, npc.name,
+            f"증거를 확보했습니다. {evidence.title}를 공개했습니다.\n{evidence.content}",
+            "evidence", npc.id, evidence_id=evidence.id,
+            recipient_npc_id=npc.id, evidence_operation="discovered",
+        )
 
 
     def _validate_decision(self, session: GameSession, npc: NPCState, decision: AgentDecision) -> list[GuardrailCheck]:

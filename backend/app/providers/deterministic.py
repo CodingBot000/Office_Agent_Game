@@ -105,10 +105,6 @@ class DeterministicIntentProvider:
                 "기록 확인",
                 "inspect",
                 "조사",
-                "에러명",
-                "오류명",
-                "에러 내용",
-                "오류 내용",
             )
         ):
             if any(keyword in normalized for keyword in ("보여", "보여줘", "보여줄", "확인", "요청", "알려")):

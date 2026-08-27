@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from app.game.session import GameSession
 from app.game.seed import FACT_REGISTRY, INCIDENT_RULES, RESPONSIBILITY_FACT_IDS, KNOWN_FACT_CONTRADICTION_PATTERNS, relationship_key
-from app.game.evidence_policy import available_fact_ids, can_provide_evidence, visible_evidence_ids, evidence_id_from_event
+from app.game.evidence_policy import available_fact_ids, can_provide_evidence, shareable_evidence_ids, visible_evidence_ids, evidence_id_from_event
 from app.models import NPCState, IntentClassification, SocialImpactClassification, SocialPolicyOutcome, AgentDecision, GuardrailCheck
 from app.providers.base import DecisionContext
 
@@ -20,6 +20,7 @@ def build_decision_context(
     reference_scope = intent.reference_scope if intent is not None else "none"
     referenced_evidence_id = intent.evidence_id if intent is not None else None
     visible_ids = visible_evidence_ids(session, npc)
+    shareable_ids = shareable_evidence_ids(session, npc)
     referenced_evidence = session.evidences.get(referenced_evidence_id or "") if referenced_evidence_id in visible_ids else None
     fact_ids = available_fact_ids(session, npc)
     context_npc = npc.model_copy(deep=True, update={
@@ -44,8 +45,11 @@ def build_decision_context(
         ),
         available_evidence_ids=tuple(session.evidences),
         recent_events=decision_recent_events(session, mode, npc),
-        visible_evidences=tuple(session.evidences[eid].model_copy(deep=True) for eid in sorted(visible_ids)),
-        available_npcs=tuple(f"{item.id}: {item.name} ({item.role})" for item in session.npcs.values()),
+        visible_evidences=tuple(session.evidences[eid].model_copy(deep=True, update={"discovered": True}) for eid in sorted(visible_ids)),
+        shareable_evidences=tuple(session.evidences[eid].model_copy(
+            deep=True, update={"discovered": eid in session.discovered_evidence},
+        ) for eid in sorted(shareable_ids)),
+        available_npcs=tuple(f"npc_id={item.id}; display_name={item.name}; role={item.role}" for item in session.npcs.values()),
         incident_rules=tuple(INCIDENT_RULES),
         question_type=question_type,
         reference_scope=reference_scope,
@@ -112,10 +116,13 @@ def validate_decision(session: GameSession, npc: NPCState, decision: AgentDecisi
         action_targets = {eid for eid in session.evidences if can_provide_evidence(session, npc, eid)}
     elif decision.action_target in session.evidences:
         action_targets |= visible_evidence_ids(session, npc)
+    accessible_evidence_ids = visible_evidence_ids(session, npc)
+    if decision.action_type == "show_evidence" and decision.action_target is not None and can_provide_evidence(session, npc, decision.action_target):
+        accessible_evidence_ids.add(decision.action_target)
     belief_subjects = set(session.npcs) | {"player", "incident"}
     return [
-        GuardrailCheck(name="evidence_refs_visible", passed=set(decision.evidence_refs).issubset(visible_evidence_ids(session, npc)),
-                       detail="Evidence claims only cite documents visible to this NPC and player."),
+        GuardrailCheck(name="evidence_refs_visible", passed=set(decision.evidence_refs).issubset(accessible_evidence_ids),
+                       detail="Evidence claims only cite documents already shared or being validly disclosed."),
         GuardrailCheck(name="contact_npcs_available", passed=all(target in session.npcs for target in decision.contact_npc_ids),
                        detail="Suggested contacts are actual available NPCs."),
         GuardrailCheck(
@@ -155,8 +162,8 @@ def validate_decision(session: GameSession, npc: NPCState, decision: AgentDecisi
         ),
         GuardrailCheck(
             name="knowledge_refs_present",
-            passed=decision.grounding_type != "fact" or bool(decision.knowledge_refs),
-            detail="Fact-grounded dialogue includes a reference; belief and acknowledgement may omit it.",
+            passed=decision.grounding_type != "fact" or bool(decision.knowledge_refs or decision.evidence_refs),
+            detail="Fact-grounded dialogue includes a fact or evidence reference; belief and acknowledgement may omit it.",
         ),
         GuardrailCheck(
             name="knowledge_refs_known_by_npc",

@@ -64,6 +64,22 @@ describe("Unity dialogue state", () => {
     expect(state.historiesByNpc.qa_01.at(-1)?.text).toBe("제공할 수 없는 증거입니다");
   });
 
+  it("keeps the NPC explanation alongside evidence disclosed during an ordinary question", () => {
+    let state = dialogueReducer(opened(), { type: "begin", request });
+    const next = snapshot({ revision: 2 });
+    next.evidences[0].discovered = true;
+    state = dialogueReducer(state, { type: "snapshot", snapshot: next });
+    state = dialogueReducer(state, { type: "resolved", request, response: response({
+      snapshot: next, classified_action: "ask", evidence_id: null,
+      message: "당시 확인한 내용이 담긴 원문을 공유할게요.",
+    }) });
+    state = dialogueReducer(state, { type: "snapshot", snapshot: next });
+    expect(state.historiesByNpc.qa_01.filter(message => message.kind === "evidence")).toHaveLength(1);
+    expect(state.historiesByNpc.qa_01.at(-1)).toMatchObject({
+      kind: "npc", speaker: "QA Engineer", text: "당시 확인한 내용이 담긴 원문을 공유할게요.",
+    });
+  });
+
   it("closes on lost proximity, retains histories and does not silently change active targets", () => {
     let state = dialogueReducer(opened(), { type: "nearby", npcId: "backend_01" });
     expect(state.activeNpcId).toBe("qa_01");

@@ -15,8 +15,13 @@ def can_provide_evidence(session: GameSession, npc: NPCState, evidence_id: str) 
     return evidence is not None and (evidence.source_npc_id == npc.id or evidence_id in npc.observed_evidence_ids)
 
 
+def shareable_evidence_ids(session: GameSession, npc: NPCState) -> set[str]:
+    """Documents this NPC can provide, independent of the player's inventory."""
+    return {evidence_id for evidence_id in session.evidences if can_provide_evidence(session, npc, evidence_id)}
+
+
 def visible_evidence_ids(session: GameSession, npc: NPCState) -> set[str]:
-    return {evidence_id for evidence_id in session.discovered_evidence if can_provide_evidence(session, npc, evidence_id)}
+    return session.discovered_evidence & shareable_evidence_ids(session, npc)
 
 
 def observe_evidence(session: GameSession, npc: NPCState, evidence_id: str) -> None:
@@ -27,13 +32,13 @@ def observe_evidence(session: GameSession, npc: NPCState, evidence_id: str) -> N
 
 
 def available_fact_ids(session: GameSession, npc: NPCState) -> list[str]:
-    observed_facts = [
-        fact_id for evidence_id in npc.observed_evidence_ids
+    document_facts = [
+        fact_id for evidence_id in sorted(shareable_evidence_ids(session, npc))
         if evidence_id in session.evidences
         for fact_id in EVIDENCE_DISCLOSED_FACT_IDS.get(evidence_id, ())
         if fact_id in FACT_REGISTRY and FACT_REGISTRY[fact_id].revealable
     ]
-    return list(dict.fromkeys([*npc.known_fact_ids, *observed_facts]))
+    return list(dict.fromkeys([*npc.known_fact_ids, *document_facts]))
 
 
 def evidence_id_from_event(session: GameSession, event: EventLogEntry) -> str | None:

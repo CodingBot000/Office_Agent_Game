@@ -152,6 +152,147 @@ def test_npc_cannot_reveal_another_npcs_unobserved_evidence():
     assert "제공할 수 없는 증거" in response.message
 
 
+@pytest.mark.parametrize("action_type", ["dialogue", "show_evidence"])
+@pytest.mark.parametrize("intent_type", ["talk", "ask"])
+def test_general_dialogue_can_share_evidence_only_when_npc_decides_to(action_type, intent_type):
+    class ConversationalIntentProvider:
+        name = "cli"
+        model = "test"
+
+        def classify(self, context):
+            return IntentClassification(intent=intent_type, target_npc_id=context.target_hint)
+
+    class ContextualEvidenceProvider:
+        name = "cli"
+        model = "test"
+
+        def decide(self, context):
+            assert context.player_input == "구체적인 내용 몰라?"
+            assert any("중단을 권고" in event for event in context.recent_events)
+            assert context.visible_evidences == ()
+            assert [e.id for e in context.shareable_evidences] == ["qa_warning_message"]
+            assert "API response mismatch" in context.shareable_evidences[0].content
+            sharing = action_type == "show_evidence"
+            return AgentDecision(
+                npc_id=context.npc.id, emotion="focused", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, grounding_type="fact",
+                knowledge_refs=[] if sharing else ["qa_sent_warning"],
+                evidence_refs=["qa_warning_message"] if sharing else [],
+                action_type=action_type, action_target="qa_warning_message" if sharing else None,
+                dialogue="제가 보낸 원문을 공유할게요. API response mismatch가 기록되어 있습니다."
+                    if sharing else "제가 배포 전에 경고를 보냈습니다.",
+            )
+
+    engine = GameEngine(provider=ContextualEvidenceProvider(), intent_provider=ConversationalIntentProvider())
+    session = engine.get_session(engine.create_session().session_id)
+    engine._append_event(session, "QA Engineer", "문제를 발견해 배포 중단을 권고했어요.", "dialogue", "qa_01")
+    engine._save_session(session)
+
+    response = engine.submit_action(session.session_id, "구체적인 내용 몰라?", target_hint="qa_01")
+
+    assert response.classified_action == intent_type
+    assert not response.snapshot.agent_traces[-1].fallback_used
+    assert response.snapshot.agent_traces[-1].decision.action_type == action_type
+    discovered = {e.id for e in response.snapshot.evidences if e.discovered}
+    assert discovered == ({"qa_warning_message"} if action_type == "show_evidence" else set())
+    notices = [e for e in response.snapshot.events if e.evidence_operation == "discovered"]
+    assert len(notices) == (1 if action_type == "show_evidence" else 0)
+    if notices:
+        assert notices[0].actor_id == notices[0].recipient_npc_id == "qa_01"
+        assert notices[0].evidence_id == "qa_warning_message"
+        assert "API response mismatch" in notices[0].message
+        assert next(e for e in reversed(response.snapshot.events) if e.event_type == "dialogue").message == response.message
+
+
+def test_shareable_evidence_context_is_private_and_does_not_reveal_inventory():
+    from app.game.conversation import build_decision_context
+
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    expected = {"qa_01": {"qa_warning_message"}, "backend_01": {"api_schema_diff"},
+                "pm_01": {"release_timeline"}, "frontend_01": set()}
+    for npc_id, evidence_ids in expected.items():
+        context = build_decision_context(session, session.npcs[npc_id], "ask", "현재 상황을 설명해 주세요.")
+        assert {e.id for e in context.shareable_evidences} == evidence_ids
+        assert context.visible_evidences == ()
+        assert all(e.content for e in context.shareable_evidences)
+    assert not any(e.content or e.discovered for e in engine.snapshot(session).evidences)
+
+
+def test_npc_disclosure_cannot_transfer_other_npcs_unobserved_document():
+    class WrongDocumentProvider:
+        name = "cli"
+        model = "test"
+
+        def decide(self, context):
+            return AgentDecision(
+                npc_id=context.npc.id, emotion="calm", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, grounding_type="fact", evidence_refs=["api_schema_diff"],
+                action_type="show_evidence", action_target="api_schema_diff", dialogue="UNAUTHORIZED DOCUMENT",
+            )
+
+    engine = GameEngine(provider=WrongDocumentProvider(), intent_provider=FixedIntentProvider())
+    response = engine.submit_action(engine.create_session().session_id, "더 자세히 듣고 싶어.", target_hint="qa_01")
+    assert not any(e.discovered for e in response.snapshot.evidences)
+    assert "UNAUTHORIZED" not in response.message
+    assert response.snapshot.agent_traces[-1].fallback_used
+
+
+def test_repeated_npc_disclosure_is_recorded_once_and_survives_reload():
+    class SharingProvider:
+        name = "cli"
+        model = "test"
+
+        def decide(self, context):
+            evidence = context.shareable_evidences[0]
+            return AgentDecision(
+                npc_id=context.npc.id, emotion="focused", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, grounding_type="fact", evidence_refs=[evidence.id],
+                action_type="show_evidence", action_target=evidence.id, dialogue=evidence.content,
+            )
+
+    engine = GameEngine(provider=SharingProvider(), intent_provider=FixedIntentProvider())
+    sid = engine.create_session().session_id
+    engine.submit_action(sid, "더 이야기해 줄래?", target_hint="qa_01")
+    response = engine.submit_action(sid, "그 내용을 다시 설명해줘.", target_hint="qa_01")
+    restored = engine.get_session(sid)
+    assert restored.discovered_evidence == {"qa_warning_message"}
+    assert len([event for event in restored.events if event.evidence_operation == "discovered"]) == 1
+    assert not any(trace.fallback_used for trace in response.snapshot.agent_traces)
+    assert all(not npc.observed_evidence_ids for npc in restored.npcs.values())
+
+
+@pytest.mark.parametrize(("dialogue", "expected"), [
+    ("Backend Developer(backend_01)에게 있어요. PM(pm_01) 소관입니다.",
+     "Backend Developer에게 있어요. PM 소관입니다."),
+    (r"PM (`pm\_01`)에게 물어보세요.", "PM에게 물어보세요."),
+    ("backend_01에게 QA warning message [qa_warning_message]를 확인해 주세요.",
+     "Backend Developer에게 QA warning message를 확인해 주세요."),
+    ("response.data.items (기존 필드)를 확인했습니다. HTTP 500 오류예요.",
+     "response.data.items (기존 필드)를 확인했습니다. HTTP 500 오류예요."),
+    ("담당자에게 확인해 주세요. (team_lead_did_not_confirm_warning)", "담당자에게 확인해 주세요."),
+])
+def test_npc_dialogue_formats_internal_ids_without_changing_structured_references(dialogue, expected):
+    class InternalIdProvider:
+        name = "cli"
+        model = "test"
+
+        def decide(self, context):
+            return AgentDecision(
+                npc_id=context.npc.id, emotion="calm", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, grounding_type="acknowledgement", action_type="dialogue",
+                contact_npc_ids=["backend_01", "pm_01"], dialogue=dialogue,
+            )
+
+    engine = GameEngine(provider=InternalIdProvider(), intent_provider=FixedIntentProvider())
+    response = engine.submit_action(engine.create_session().session_id, "안녕하세요", target_hint="qa_01")
+    assert response.message == expected
+    assert response.snapshot.events[-1].message == expected
+    assert response.snapshot.agent_traces[-1].decision.dialogue == expected
+    assert response.snapshot.agent_traces[-1].decision.contact_npc_ids == ["backend_01", "pm_01"]
+    assert not response.snapshot.agent_traces[-1].fallback_used
+
+
 def test_evidence_reaction_does_not_erase_invalid_private_fact_references():
     class PrivateFactReaction:
         name = "openai"
@@ -880,7 +1021,7 @@ def test_selected_dialogue_target_overrides_misclassified_npc() -> None:
     assert response.snapshot.events[-1].actor_id == "backend_01"
 
 
-def test_concrete_issue_question_reveals_qa_evidence() -> None:
+def test_error_name_question_does_not_force_evidence_transfer() -> None:
     engine = GameEngine(
         provider=DeterministicDecisionProvider(),
         intent_provider=DeterministicIntentProvider(),
@@ -894,9 +1035,9 @@ def test_concrete_issue_question_reveals_qa_evidence() -> None:
     )
 
     warning = next(evidence for evidence in response.snapshot.evidences if evidence.id == "qa_warning_message")
-    assert response.classified_action == "request_evidence"
-    assert warning.discovered is True
-    assert "API response mismatch" in response.message
+    assert response.classified_action == "ask"
+    assert warning.discovered is False
+    assert response.snapshot.agent_traces[-1].decision.action_type == "dialogue"
 
 
 def test_invalid_agent_action_is_rejected_with_visible_fallback(caplog) -> None:

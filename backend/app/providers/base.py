@@ -43,6 +43,7 @@ class DecisionContext:
     referenced_evidence_content: str | None = None
     responsibility_map: tuple[str, ...] = ()
     visible_evidences: tuple[Evidence, ...] = ()
+    shareable_evidences: tuple[Evidence, ...] = ()
     available_npcs: tuple[str, ...] = ()
     social_classification: SocialImpactClassification | None = None
     social_outcome: SocialPolicyOutcome | None = None
