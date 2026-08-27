@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatEmotion, formatWorldObjectName, GameActionLabel } from "./display";
 import type { AvailableGameAction, GameSnapshot, NPCState } from "./types";
+import type { GameDialogueController } from "./dialogue/useGameDialogue";
+import { GameDialoguePanel } from "./dialogue/GameDialoguePanel";
+import { useGameKeyboard } from "./input/useGameKeyboard";
 
 export type VisualMode = "dialogue" | "visual";
 
@@ -23,7 +26,7 @@ type VisualOfficeProps = {
   onReset: () => void;
   onLocationChange: (location: string) => void;
   onSelectNpc: (id: string) => void;
-  onTalk: (id: string) => void;
+  dialogue: GameDialogueController;
   onAction: (action: AvailableGameAction) => Promise<boolean>;
 };
 
@@ -171,7 +174,7 @@ export function VisualOffice({
   onReset,
   onLocationChange,
   onSelectNpc,
-  onTalk,
+  dialogue,
   onAction,
 }: VisualOfficeProps) {
   const initialPosition = locationSpawnPoints[snapshot.current_location] ?? locationSpawnPoints.meeting_room;
@@ -183,9 +186,9 @@ export function VisualOffice({
   const [selectedThrowObjectId, setSelectedThrowObjectId] = useState<string | null>(null);
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const [throwAnimation, setThrowAnimation] = useState<ThrowAnimation | null>(null);
-  const keysRef = useRef<Set<string>>(new Set());
+  const mapRef = useRef<HTMLDivElement>(null);
+  const directionPressRef = useRef<{ time: number; position: WorldPoint } | null>(null);
   const nearestNpcRef = useRef<typeof nearestNpc>(null);
-  const completedRef = useRef(snapshot.completed);
   const lastLocationRef = useRef(getLocationForPoint(initialPosition));
   const throwTimersRef = useRef<number[]>([]);
   const throwPresentationRef = useRef<ThrowPresentation | null>(null);
@@ -207,7 +210,6 @@ export function VisualOffice({
     return candidates && candidates.distance <= INTERACTION_DISTANCE ? candidates : null;
   }, [playerPosition, snapshot.npcs]);
   nearestNpcRef.current = nearestNpc;
-  completedRef.current = snapshot.completed;
   const currentLocation = getLocationForPoint(playerPosition);
   const heldObjects = useMemo(
     () => snapshot.player_inventory.held_object_ids
@@ -248,45 +250,39 @@ export function VisualOffice({
     onLocationChange(currentLocation);
   }, [currentLocation, onLocationChange]);
 
-  useEffect(() => {
-    const down = (event: KeyboardEvent) => {
-      const movementKey = getMovementKey(event);
-      if (movementKey) {
-        event.preventDefault();
-        keysRef.current.add(movementKey);
-      }
-      const key = event.key.toLowerCase();
+  const keysRef = useGameKeyboard({
+    movementBlocked: dialogue.state.isOpen,
+    completed: snapshot.completed,
+    onInteract: () => {
       const nearbyNpc = nearestNpcRef.current;
-      if (key === "e" && nearbyNpc && !completedRef.current) {
-        event.preventDefault();
-        onSelectNpc(nearbyNpc.npc.id);
-        setInteractionOpen(true);
-      }
-      if (key === "i" && !completedRef.current) {
-        event.preventDefault();
-        setInventoryOpen((open) => !open);
-      }
-    };
-    const up = (event: KeyboardEvent) => {
-      const movementKey = getMovementKey(event);
-      if (movementKey) keysRef.current.delete(movementKey);
-    };
-    const clearKeys = () => keysRef.current.clear();
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    window.addEventListener("blur", clearKeys);
-    document.addEventListener("visibilitychange", clearKeys);
-    return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", clearKeys);
-      document.removeEventListener("visibilitychange", clearKeys);
-      clearKeys();
-    };
-  }, [onSelectNpc]);
+      if (!nearbyNpc) return false;
+      onSelectNpc(nearbyNpc.npc.id);
+      setInteractionOpen(true);
+      return true;
+    },
+    onInventory: () => setInventoryOpen(open => !open),
+  });
+
+  useLayoutEffect(() => { dialogue.setNearby(nearestNpc?.npc.id ?? null); }, [nearestNpc?.npc.id, dialogue.setNearby]);
+  useEffect(() => () => dialogue.setNearby(null), [dialogue.setNearby]);
+
+  const openDialogue = (npcId: string) => {
+    keysRef.current.clear();
+    setInteractionOpen(false);
+    setActionMenuOpen(false);
+    setPlayerActionOpen(false);
+    setSelectedThrowObjectId(null);
+    dialogue.open(npcId);
+  };
+  const closeDialogue = () => {
+    dialogue.close();
+    setInteractionOpen(Boolean(nearestNpcRef.current));
+    keysRef.current.clear();
+    requestAnimationFrame(() => mapRef.current?.focus({ preventScroll: true }));
+  };
 
   useEffect(() => {
-    if (snapshot.completed) return;
+    if (snapshot.completed || dialogue.state.isOpen) return;
     let animationFrame = 0;
     let lastTime = performance.now();
 
@@ -315,7 +311,7 @@ export function VisualOffice({
 
     animationFrame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animationFrame);
-  }, [snapshot.completed]);
+  }, [snapshot.completed, dialogue.state.isOpen]);
 
   useEffect(() => {
     if (!nearestNpc) {
@@ -334,6 +330,30 @@ export function VisualOffice({
   useEffect(() => () => {
     throwTimersRef.current.forEach((timer) => window.clearTimeout(timer));
   }, []);
+
+  const nudgePlayer = (key: "arrowup" | "arrowleft" | "arrowdown" | "arrowright", startedAt?: WorldPoint) => {
+    if (dialogue.state.isOpen || snapshot.completed) return;
+    const direction = { arrowup: { x: 0, y: 1 }, arrowleft: { x: -1, y: 0 }, arrowdown: { x: 0, y: -1 }, arrowright: { x: 1, y: 0 } }[key];
+    setPlayerDirection(direction.x ? (direction.x < 0 ? "left" : "right") : (direction.y > 0 ? "back" : "front"));
+    setPlayerPosition(position => {
+      const travelled = startedAt ? Math.hypot(position.x - startedAt.x, position.y - startedAt.y) : 0;
+      const distance = Math.max(0, PLAYER_SPEED * 0.1 - travelled);
+      return movePlayer(position, { x: direction.x * distance, y: direction.y * distance });
+    });
+  };
+
+  const directionControls = (key: "arrowup" | "arrowleft" | "arrowdown" | "arrowright") => ({
+    disabled: dialogue.state.isOpen || snapshot.completed,
+    onPointerDown: () => { directionPressRef.current = { time: performance.now(), position: playerPosition }; keysRef.current.add(key); },
+    onPointerUp: () => keysRef.current.delete(key),
+    onPointerLeave: () => { keysRef.current.delete(key); directionPressRef.current = null; },
+    onPointerCancel: () => { keysRef.current.clear(); directionPressRef.current = null; },
+    onClick: () => {
+      const press = directionPressRef.current;
+      directionPressRef.current = null;
+      if (!press || performance.now() - press.time < 150) nudgePlayer(key, press?.position);
+    },
+  });
 
   const selectNpc = (id: string) => {
     onSelectNpc(id);
@@ -449,7 +469,7 @@ export function VisualOffice({
           </div>
 
           <div className="visual-stage-frame">
-            <div className="office-map" role="application" aria-label="Unity 스타일 사무실 게임 화면">
+            <div className="office-map" role="application" aria-label="Unity 스타일 사무실 게임 화면" tabIndex={0} ref={mapRef}>
               <div className="map-floor" />
               <div className="map-zone map-dev-zone"><span>DEV AREA</span></div>
               <div className="map-zone map-qa-zone"><span>QA DESK</span></div>
@@ -516,14 +536,14 @@ export function VisualOffice({
                 <div className="nearby-marker" style={worldPointStyle(nearestNpc.layout.point, 0.7)} aria-hidden="true">E</div>
               )}
 
-              {interactionOpen && nearestNpc && (
+              {interactionOpen && nearestNpc && !dialogue.state.isOpen && (
                 <div className={`world-interaction-card ${actionMenuOpen ? "actions-open" : ""}`} style={centeredWorldStyle(nearestNpc.layout.point.x, nearestNpc.layout.point.y + 1.6, 3.65, actionMenuOpen ? 4.35 : 1.22)}>
                   <strong>{nearestNpc.npc.name}</strong>
                   {!actionMenuOpen ? (
                     <>
                       <span>무엇을 할까요?</span>
                       <div>
-                        <button type="button" onClick={() => onTalk(nearestNpc.npc.id)}>대화하기</button>
+                        <button type="button" onClick={() => openDialogue(nearestNpc.npc.id)}>대화하기</button>
                         <button type="button" onClick={() => setActionMenuOpen(true)}>액션 보기</button>
                       </div>
                     </>
@@ -542,38 +562,6 @@ export function VisualOffice({
                 <CharacterSprite asset={`${OFFICE_ASSET_BASE}/characters/player.png`} direction={playerDirection} />
                 <span className="world-character-label">PLAYER</span>
               </div>
-
-              {throwObjectIds.length > 0 && !playerActionOpen && (
-                <button className="world-player-action-button" type="button" style={worldPointStyle({ x: playerPosition.x, y: playerPosition.y + 1.28 }, 1.2)} onClick={openPlayerActionMenu} disabled={submitting || snapshot.completed}>
-                  액션
-                </button>
-              )}
-
-              {playerActionOpen && (
-                <div className="player-action-panel">
-                  <div className="player-action-heading">
-                    <strong>{selectedThrowObjectId ? "대상 선택" : "던질 물건 선택"}</strong>
-                    <button type="button" onClick={() => { setPlayerActionOpen(false); setSelectedThrowObjectId(null); }}>닫기</button>
-                  </div>
-                  {!selectedThrowObjectId ? (
-                    <div className="player-action-list">
-                      {throwObjectIds.map((objectId) => {
-                        const worldObject = snapshot.world_objects.find((item) => item.id === objectId);
-                        return <button key={objectId} type="button" onClick={() => setSelectedThrowObjectId(objectId)}><span className="player-action-item-name">{worldObject ? formatWorldObjectName(worldObject.name) : objectId}</span> 던지기</button>;
-                      })}
-                    </div>
-                  ) : (
-                    <div className="player-action-list">
-                      <button className="player-action-back" type="button" onClick={() => setSelectedThrowObjectId(null)}>← 물건 다시 선택</button>
-                      {selectedThrowActions.map((action) => {
-                        const target = snapshot.npcs.find((npc) => npc.id === action.target_id);
-                        if (!target || isNpcVisuallyComatose(target)) return null;
-                        return <button key={action.id} type="button" onClick={() => void executeVisualAction(action)} disabled={submitting}>{target.name} · {target.role}</button>;
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
 
               {throwAnimation && (() => {
                 const target = npcWorldLayout[throwAnimation.targetId]?.point;
@@ -610,6 +598,41 @@ export function VisualOffice({
 
               <div className="map-location-chip">{locationLabels[currentLocation] ?? currentLocation}</div>
             </div>
+            <GameDialoguePanel controller={dialogue} snapshot={snapshot} requestBusy={submitting} viewportRef={mapRef} onClose={closeDialogue} />
+            <div className="world-hud-overlay">
+              {throwObjectIds.length > 0 && !playerActionOpen && !dialogue.state.isOpen && !actionMenuOpen && (
+                <button className="world-player-action-button" type="button" style={worldPointStyle({ x: playerPosition.x, y: playerPosition.y + 1.28 }, 1.2)} onClick={openPlayerActionMenu} disabled={submitting || snapshot.completed}>
+                  액션
+                </button>
+              )}
+
+              {playerActionOpen && !dialogue.state.isOpen && !actionMenuOpen && (
+                <div className="player-action-panel">
+                  <div className="player-action-heading">
+                    <strong>{selectedThrowObjectId ? "대상 선택" : "던질 물건 선택"}</strong>
+                    <button type="button" onClick={() => { setPlayerActionOpen(false); setSelectedThrowObjectId(null); }}>닫기</button>
+                  </div>
+                  {!selectedThrowObjectId ? (
+                    <div className="player-action-list">
+                      {throwObjectIds.map((objectId) => {
+                        const worldObject = snapshot.world_objects.find((item) => item.id === objectId);
+                        return <button key={objectId} type="button" onClick={() => setSelectedThrowObjectId(objectId)}><span className="player-action-item-name">{worldObject ? formatWorldObjectName(worldObject.name) : objectId}</span> 던지기</button>;
+                      })}
+                    </div>
+                  ) : (
+                    <div className="player-action-list">
+                      <button className="player-action-back" type="button" onClick={() => setSelectedThrowObjectId(null)}>← 물건 다시 선택</button>
+                      {selectedThrowActions.map((action) => {
+                        const target = snapshot.npcs.find((npc) => npc.id === action.target_id);
+                        if (!target || isNpcVisuallyComatose(target)) return null;
+                        return <button key={action.id} type="button" onClick={() => void executeVisualAction(action)} disabled={submitting}>{target.name} · {target.role}</button>;
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+            </div>
           </div>
 
           <div className="visual-controls-bar">
@@ -619,10 +642,10 @@ export function VisualOffice({
               <span><b>I</b> INVENTORY</span>
             </div>
             <div className="d-pad" aria-label="이동 방향 버튼">
-              <button type="button" onPointerDown={() => keysRef.current.add("arrowup")} onPointerUp={() => keysRef.current.delete("arrowup")} onPointerLeave={() => keysRef.current.delete("arrowup")} aria-label="위로 이동">↑</button>
-              <button type="button" onPointerDown={() => keysRef.current.add("arrowleft")} onPointerUp={() => keysRef.current.delete("arrowleft")} onPointerLeave={() => keysRef.current.delete("arrowleft")} aria-label="왼쪽으로 이동">←</button>
-              <button type="button" onPointerDown={() => keysRef.current.add("arrowdown")} onPointerUp={() => keysRef.current.delete("arrowdown")} onPointerLeave={() => keysRef.current.delete("arrowdown")} aria-label="아래로 이동">↓</button>
-              <button type="button" onPointerDown={() => keysRef.current.add("arrowright")} onPointerUp={() => keysRef.current.delete("arrowright")} onPointerLeave={() => keysRef.current.delete("arrowright")} aria-label="오른쪽으로 이동">→</button>
+              <button type="button" {...directionControls("arrowup")} aria-label="위로 이동">↑</button>
+              <button type="button" {...directionControls("arrowleft")} aria-label="왼쪽으로 이동">←</button>
+              <button type="button" {...directionControls("arrowdown")} aria-label="아래로 이동">↓</button>
+              <button type="button" {...directionControls("arrowright")} aria-label="오른쪽으로 이동">→</button>
             </div>
           </div>
         </div>
@@ -658,7 +681,7 @@ export function VisualOffice({
                 <MetricBar label="COOPERATION" value={selectedNpc.dynamic_state.cooperation} tone="green" />
               </div>
               {nearestNpc?.npc.id === selectedNpc.id ? (
-                <button className="visual-interact-button" type="button" onClick={() => setInteractionOpen(true)} disabled={submitting || snapshot.completed}>E · INTERACT</button>
+                <button className="visual-interact-button" type="button" onClick={() => setInteractionOpen(true)} disabled={submitting || snapshot.completed || dialogue.state.isOpen}>E · INTERACT</button>
               ) : (
                 <p className="visual-distance-note">{isNpcVisuallyComatose(selectedNpc) ? "혼수상태로 대화할 수 없지만 물건과 액션은 상호작용할 수 있습니다." : "NPC에게 가까이 가면 상호작용할 수 있습니다."}</p>
               )}
@@ -740,20 +763,6 @@ function isPersonObjectId(objectId: string): boolean {
 
 function isFearOrShock(emotion: string): boolean {
   return emotion === "afraid" || emotion === "shocked";
-}
-
-function getMovementKey(event: KeyboardEvent): string | null {
-  switch (event.code) {
-    case "KeyW": return "w";
-    case "KeyA": return "a";
-    case "KeyS": return "s";
-    case "KeyD": return "d";
-    case "ArrowUp": return "arrowup";
-    case "ArrowDown": return "arrowdown";
-    case "ArrowLeft": return "arrowleft";
-    case "ArrowRight": return "arrowright";
-    default: return null;
-  }
 }
 
 function MapAsset({ src, alt, className, style }: { src: string; alt: string; className: string; style: React.CSSProperties }) {

@@ -1,9 +1,12 @@
-import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { ApiError, getSession, resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
+import { resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
+import { useSessionRequests } from "./hooks/useSessionRequests";
+import { useGameDialogue } from "./dialogue/useGameDialogue";
 import { formatEmotion, formatWorldObjectName, GameActionLabel } from "./display";
 import { ModeChooser, VisualOffice } from "./VisualOffice";
 import type {
+  ActionResponse,
   AvailableGameAction,
   AgentTrace,
   Evidence,
@@ -61,17 +64,33 @@ function App() {
   const [contributingFactors, setContributingFactors] = useState("");
   const [activeInspectorTab, setActiveInspectorTab] = useState<"npc" | "agent">("npc");
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionAlert, setActionAlert] = useState<string | null>(null);
-  const visualLocationRequest = useRef<string | null>(null);
+  const [desiredLocation, setDesiredLocation] = useState<{ sessionId: string; location: NonNullable<IntentClassification["location"]> } | null>(null);
   const eventLogRef = useRef<HTMLDivElement | null>(null);
 
+  const applySnapshot = useCallback((value: GameSnapshot) => {
+    setSnapshot(value);
+    setLastIntent(null);
+  }, []);
+  const requests = useSessionRequests(snapshot, applySnapshot);
+  const submitting = requests.busy;
+  const sendVisualDialogue = useCallback(async (text: string, targetId: string) => {
+    setError(null);
+    setActionAlert(null);
+    const response = await requests.run((sessionId, signal) => submitAction(sessionId, text, undefined, targetId, signal), result => result.snapshot);
+    setLastIntent(intentMetadata(response));
+    return response;
+  }, [requests.run]);
+  const gameDialogue = useGameDialogue({ snapshot, busy: submitting, isBusy: requests.isBusy, sendRequest: sendVisualDialogue });
+
   useEffect(() => {
+    let active = true;
     startSession()
-      .then(setSnapshot)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Backend 연결에 실패했습니다."))
-      .finally(() => setLoading(false));
+      .then(value => { if (active) setSnapshot(value); })
+      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Backend 연결에 실패했습니다."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
   useLayoutEffect(() => {
@@ -118,68 +137,40 @@ function App() {
   );
   const latestFallback = snapshot?.fallback_notices[snapshot.fallback_notices.length - 1] ?? null;
 
-  async function recoverRequestError(reason: unknown, sessionId: string, fallbackMessage: string): Promise<string> {
-    if (reason instanceof ApiError && reason.status === 409) {
-      try {
-        setSnapshot(await getSession(sessionId));
-        setLastIntent(null);
-        return "다른 요청으로 세션이 변경되어 최신 상태를 불러왔습니다. 내용을 확인한 뒤 다시 시도해 주세요.";
-      } catch (reloadError: unknown) {
-        if (reloadError instanceof ApiError && reloadError.status === 404) {
-          return "이 세션은 다른 요청에서 초기화되었습니다. 페이지를 새로고침해 새 세션을 시작해 주세요.";
-        }
-        return "요청이 충돌했고 최신 상태를 불러오지 못했습니다. 연결을 확인한 뒤 다시 시도해 주세요.";
-      }
-    }
-    return reason instanceof Error ? reason.message : fallbackMessage;
-  }
-
   async function executeCommand(text: string, intentHint?: IntentClassification, targetHintOverride?: string | null) {
-    if (!snapshot || !text.trim() || submitting || snapshot.completed) return;
+    if (!snapshot || !text.trim() || requests.isBusy() || snapshot.completed) return;
     const submittedText = text.trim();
-    setSubmitting(true);
     setError(null);
     setActionAlert(null);
     setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "pending" });
     try {
-      const response = await submitAction(snapshot.session_id, submittedText, intentHint, targetHintOverride);
-      setSnapshot(response.snapshot);
+      const response = await requests.run(
+        (sessionId, signal) => submitAction(sessionId, submittedText, intentHint, targetHintOverride, signal),
+        result => result.snapshot,
+      );
       setPendingCommand(null);
       setActionAlert(response.alert);
-      setLastIntent({
-        action: response.classified_action,
-        provider: response.intent_provider,
-        confidence: response.intent_confidence,
-        fallback: response.intent_fallback_used,
-        socialProvider: response.social_impact_provider,
-        socialFallback: response.social_impact_fallback_used,
-      });
+      setLastIntent(intentMetadata(response));
       setCommand("");
       setTargetHint(null);
     } catch (reason: unknown) {
-      const message = await recoverRequestError(reason, snapshot.session_id, "명령 처리에 실패했습니다.");
+      const message = reason instanceof Error ? reason.message : "명령 처리에 실패했습니다.";
       setError(message);
       setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "error", error: message });
-    } finally {
-      setSubmitting(false);
     }
   }
 
   async function executeGameAction(action: AvailableGameAction): Promise<boolean> {
-    if (!snapshot || submitting || snapshot.completed || !action.enabled) return false;
-    setSubmitting(true);
+    if (!snapshot || requests.isBusy() || snapshot.completed || !action.enabled) return false;
     setError(null);
     setActionAlert(null);
     try {
-      const response = await submitGameAction(snapshot.session_id, action.id);
-      setSnapshot(response.snapshot);
+      const response = await requests.run((sessionId, signal) => submitGameAction(sessionId, action.id, signal), result => result.snapshot);
       setActionAlert(response.blocked ? `차단됨: ${response.message} ${response.alert ?? ""}`.trim() : response.message);
       return !response.blocked;
     } catch (reason: unknown) {
-      setError(await recoverRequestError(reason, snapshot.session_id, "게임 행동 처리에 실패했습니다."));
+      setError(reason instanceof Error ? reason.message : "게임 행동 처리에 실패했습니다.");
       return false;
-    } finally {
-      setSubmitting(false);
     }
   }
 
@@ -189,12 +180,11 @@ function App() {
   }
 
   async function handleReset() {
-    if (!snapshot || submitting) return;
-    setSubmitting(true);
+    if (!snapshot || requests.isBusy()) return;
     setError(null);
     setActionAlert(null);
     try {
-      setSnapshot(await resetSession(snapshot.session_id));
+      await requests.run((sessionId, signal) => resetSession(sessionId, signal), result => result, { replaceSession: true, allowCompleted: true });
       setLastIntent(null);
       setPendingCommand(null);
       setTargetHint(null);
@@ -202,61 +192,44 @@ function App() {
       setPrimaryCause("");
       setContributingFactors("");
     } catch (reason: unknown) {
-      setError(await recoverRequestError(reason, snapshot.session_id, "세션 초기화에 실패했습니다."));
-    } finally {
-      setSubmitting(false);
+      setError(reason instanceof Error ? reason.message : "세션 초기화에 실패했습니다.");
     }
   }
 
   async function handleReport(event: FormEvent) {
     event.preventDefault();
-    if (!snapshot || !primaryCause.trim() || submitting) return;
-    setSubmitting(true);
+    if (!snapshot || !primaryCause.trim() || requests.isBusy()) return;
     setError(null);
     try {
       const factors = contributingFactors
         .split(",")
         .map((factor) => factor.trim())
         .filter(Boolean);
-      setSnapshot(await submitReport(snapshot.session_id, primaryCause.trim(), factors));
+      await requests.run((sessionId, signal) => submitReport(sessionId, primaryCause.trim(), factors, signal), result => result);
     } catch (reason: unknown) {
-      setError(await recoverRequestError(reason, snapshot.session_id, "보고서 제출에 실패했습니다."));
-    } finally {
-      setSubmitting(false);
+      setError(reason instanceof Error ? reason.message : "보고서 제출에 실패했습니다.");
     }
   }
 
-  function openDialogue(targetId?: string) {
-    if (targetId) {
-      setSelectedNpcId(targetId);
-      setTargetHint(targetId);
-    }
-    setCommand("");
-    setViewMode("dialogue");
+  function chooseMode(mode: "dialogue" | "visual") {
+    if (mode !== viewMode) gameDialogue.close();
+    setViewMode(mode);
   }
 
-  async function syncVisualLocation(location: string) {
-    if (!(["meeting_room", "dev_area", "qa_desk", "pm_desk"] as string[]).includes(location)) {
-      return;
-    }
-    const targetLocation = location as NonNullable<IntentClassification["location"]>;
-    if (
-      !snapshot
-      || snapshot.completed
-      || snapshot.current_location === targetLocation
-      || submitting
-      || visualLocationRequest.current === targetLocation
-    ) {
-      return;
-    }
+  const queueVisualLocation = useCallback((location: string) => {
+    if (!snapshot || !["meeting_room", "dev_area", "qa_desk", "pm_desk"].includes(location)) return;
+    setDesiredLocation({ sessionId: snapshot.session_id, location: location as NonNullable<IntentClassification["location"]> });
+  }, [snapshot?.session_id]);
 
-    visualLocationRequest.current = targetLocation;
-    try {
-      await executeCommand(`이동: ${targetLocation}`, moveHint(targetLocation), null);
-    } finally {
-      visualLocationRequest.current = null;
-    }
-  }
+  useEffect(() => {
+    if (!desiredLocation || !snapshot || desiredLocation.sessionId !== snapshot.session_id
+      || snapshot.completed || submitting || requests.isBusy()) return;
+    setDesiredLocation(null);
+    if (desiredLocation.location === snapshot.current_location) return;
+    const location = desiredLocation.location;
+    void requests.run((sessionId, signal) => submitAction(sessionId, `이동: ${location}`, moveHint(location), null, signal), result => result.snapshot)
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "위치 동기화에 실패했습니다."));
+  }, [desiredLocation, snapshot, submitting, requests.run, requests.isBusy]);
 
   if (loading) return <div className="boot-screen">Loading incident workspace…</div>;
   if (!snapshot) {
@@ -286,11 +259,11 @@ function App() {
         submitting={submitting}
         error={error}
         actionAlert={actionAlert}
-        onChooseMode={(mode) => setViewMode(mode)}
+        onChooseMode={chooseMode}
         onReset={() => void handleReset()}
-        onLocationChange={(location) => void syncVisualLocation(location)}
+        onLocationChange={queueVisualLocation}
         onSelectNpc={setSelectedNpcId}
-        onTalk={openDialogue}
+        dialogue={gameDialogue}
         onAction={executeGameAction}
       />
     );
@@ -1090,3 +1063,14 @@ interface PendingCommand {
 }
 
 export default App;
+
+function intentMetadata(response: ActionResponse): ActionResponseMeta {
+  return {
+    action: response.classified_action,
+    provider: response.intent_provider,
+    confidence: response.intent_confidence,
+    fallback: response.intent_fallback_used,
+    socialProvider: response.social_impact_provider,
+    socialFallback: response.social_impact_fallback_used,
+  };
+}
