@@ -18,7 +18,7 @@ from app.game.reporting import evaluate_report
 from app.providers.base import ReportProvider
 from app.providers.factory import create_report_provider
 from app.game.state_transitions import change_relationship, npc_response_block
-from app.game.evidence_policy import available_fact_ids, can_provide_evidence, observe_evidence, evidence_id_from_event, latest_evidence_id, presentation_count, evidence_presentation_policy
+from app.game.evidence_policy import available_fact_ids, can_provide_evidence, visible_evidence_ids, observe_evidence, evidence_id_from_event, latest_evidence_id, presentation_count, evidence_presentation_policy
 from app.game.action_registry import build_available_game_actions, build_player_inventory
 from app.game.seed import NPC_HOME_LOCATIONS, LOCATION_LABELS
 from app.game.social_rules import BASE_RELATIONSHIP_IMPACTS, GAME_ACTION_FAMILIES, SEVERITY_RANGES
@@ -539,6 +539,7 @@ class GameEngine:
         text: str,
         target_hint: str | None = None,
     ) -> tuple[IntentClassification, bool]:
+        target_npc = session.npcs.get(target_hint or "")
         context = IntentContext(
             player_input=text,
             current_location=session.current_location,
@@ -550,10 +551,14 @@ class GameEngine:
             available_locations=tuple(LOCATION_LABELS),
             available_actions=tuple(AVAILABLE_ACTIONS),
             available_evidences=tuple(
-                f"{evidence.id}: {evidence.title} — {evidence.summary}"
+                f"{evidence.id}: {evidence.title} (source_npc_id={evidence.source_npc_id}) — {evidence.summary}"
                 for evidence in session.evidences.values()
             ),
-            recent_events=self._intent_recent_events(session),
+            requestable_evidence_ids=tuple(
+                evidence_id for evidence_id in session.evidences
+                if target_npc is not None and can_provide_evidence(session, target_npc, evidence_id)
+            ),
+            recent_events=self._intent_recent_events(session, target_hint),
             latest_discovered_evidence_id=self._latest_discovered_evidence_id(session),
         )
         try:
@@ -641,18 +646,29 @@ class GameEngine:
         )
         return candidate.model_copy(update=updates)
 
-    def _intent_recent_events(self, session: GameSession) -> tuple[str, ...]:
+    def _intent_recent_events(self, session: GameSession, target_npc_id: str | None = None) -> tuple[str, ...]:
+        npc = session.npcs.get(target_npc_id or "")
+        visible_ids = visible_evidence_ids(session, npc) if npc is not None else session.discovered_evidence
         events = []
-        for event in session.events[-8:]:
+        for event in session.events[-16:]:
+            if npc is not None and (
+                event.recipient_npc_id not in {None, npc.id} or event.actor_id not in {None, npc.id}
+            ):
+                continue
+            if event.event_type in {"fallback", "guardrail"}:
+                continue
             evidence_id = self._evidence_id_from_event(session, event)
+            if npc is not None and event.event_type == "evidence" and evidence_id not in visible_ids:
+                continue
             if event.event_type == "evidence" and evidence_id is not None:
                 evidence = session.evidences[evidence_id]
                 events.append(
-                    f"TURN {event.turn} · {event.actor}: discovered_evidence={evidence.id} title={evidence.title}"
+                    f"TURN {event.turn} · {event.actor}: evidence={evidence.id} "
+                    f"operation={event.evidence_operation or 'discovered'} title={evidence.title}"
                 )
             else:
                 events.append(f"TURN {event.turn} · {event.actor}: {event.message}")
-        return tuple(events)
+        return tuple(events[-8:])
 
     def _latest_discovered_evidence_id(self, session: GameSession) -> str | None:
         return latest_evidence_id(session)
@@ -692,8 +708,27 @@ class GameEngine:
             candidate.question_type != "evidence_followup"
             or (bool(candidate.referenced_evidence_ids) and set(candidate.referenced_evidence_ids).issubset(session.discovered_evidence))
         )
-        if target_valid and evidence_valid and location_valid and player_has_evidence and followup_evidence_owned:
-            return candidate, False
+        target_npc = session.npcs.get(candidate.target_npc_id or "")
+        evidence_source_available = (
+            candidate.intent != "request_evidence"
+            or target_npc is None
+            or candidate.evidence_id is None
+            or can_provide_evidence(session, target_npc, candidate.evidence_id)
+        )
+        references_valid = (target_valid and evidence_valid and location_valid
+                            and player_has_evidence and followup_evidence_owned)
+        fallback = None
+        if references_valid:
+            if evidence_source_available:
+                return candidate, False
+            fallback = self._resolve_intent_references(session, self.intent_fallback_provider.classify(context))
+            if (fallback.intent not in {"ask", "talk"}
+                    or fallback.evidence_id is not None or fallback.referenced_evidence_ids
+                    or fallback.interaction_kind != "dialogue"):
+                # An explicit unavailable request is still a valid intent.
+                # Let the action refuse it; never substitute another document.
+                return candidate, False
+            fallback = fallback.model_copy(update={"target_npc_id": candidate.target_npc_id})
 
         failed_checks = []
         if not target_valid:
@@ -706,13 +741,19 @@ class GameEngine:
             failed_checks.append("player_evidence_ownership")
         if not followup_evidence_owned:
             failed_checks.append("followup_evidence_discovered")
+        if not evidence_source_available:
+            failed_checks.append("evidence_source_available")
         self._record_fallback(
             session,
             stage="intent_guardrail",
             provider=self.intent_provider.name,
             reason=f"Intent guardrail rejected: {', '.join(failed_checks)}.",
         )
-        fallback = self._resolve_intent_references(session, self.intent_fallback_provider.classify(context))
+        if fallback is None:
+            fallback = self._resolve_intent_references(session, self.intent_fallback_provider.classify(context))
+        # A general question misrouted to another NPC's evidence can now reach
+        # dialogue. Explicit unavailable requests still reach the ownership
+        # check in _request_evidence; recovery never transfers that document.
         return fallback, True
 
     def _handle_action(self, session: GameSession, intent: IntentClassification, text: str) -> str:

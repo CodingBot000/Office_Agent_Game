@@ -148,6 +148,7 @@ def build_intent_prompt(context: IntentContext) -> str:
             "available_evidence_ids": context.available_evidence_ids,
             "discovered_evidence_ids": context.discovered_evidence_ids,
             "available_evidences": context.available_evidences,
+            "requestable_evidence_ids": context.requestable_evidence_ids,
             "recent_events": context.recent_events,
             "latest_discovered_evidence_id": context.latest_discovered_evidence_id,
             "available_locations": context.available_locations,
@@ -163,6 +164,11 @@ Markdown, explanations, hidden reasoning, or chain-of-thought.
 
 Rules:
 - Infer meaning, not just exact keywords.
+- Classify the CURRENT player_input first. Previous turns and the evidence registry may resolve an
+  actual reference in that message, but must not invent an evidence request or presentation.
+- General questions about what happened, what problem occurred, or the current situation are
+  intent=ask, question_type=general_status, reference_scope=none, evidence_id=null,
+  referenced_evidence_ids=[]. This remains true when the player owns evidence from another NPC.
 - Set question_type to the semantic purpose of the message. Use none for commands with no question.
 - Set reference_scope=explicit when the message directly identifies evidence. Use latest_discovered
   or conversation_context when pronouns or conversational references point to evidence already shown.
@@ -180,13 +186,19 @@ Rules:
 - Natural-language game_action_attempts are never executed by the server; the UI must use the supplied buttons.
 - target_hint is the NPC selected by the player in the current dialogue UI. Use it as the target for
   dialogue, evidence, and social actions unless the request is a movement or meeting command.
+- recent_events contains the selected NPC's conversation when target_hint is set. Do not assume
+  the selected NPC participated in other conversations. discovered_evidence_ids is the player's
+  inventory, not proof that the selected NPC has seen those documents. requestable_evidence_ids
+  lists documents that NPC can provide; unavailable explicit requests are still classified honestly
+  so the server can refuse them. Never substitute another document or NPC to make a request succeed.
 - Use only the supplied IDs for target_npc_id and evidence_id.
 - request_evidence means the Player asks an NPC to reveal evidence to the Player. Requests such as
   "show me the warning" or "can you show the message?" are request_evidence.
 - request_evidence must use question_type=evidence_request and evidence_id should identify the
   requested evidence when the supplied registry makes that possible.
-- Questions asking for the concrete issue, error name, error message, critical issue details, or
-  exact warning should be request_evidence when a matching evidence record exists.
+- Requests for a specific record's exact error text or warning can be request_evidence. A general
+  question about a problem or issue is NOT a request for a document just because its topic matches
+  an evidence record. When no document/content transfer is requested, keep the normal ask/talk intent.
 - show_evidence means the Player presents evidence they already possess to an NPC. Only choose it
   when evidence_id is present in discovered_evidence_ids.
 - Use location only for move or summon_meeting intents.

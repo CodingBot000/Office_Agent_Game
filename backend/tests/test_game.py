@@ -517,6 +517,105 @@ def test_request_evidence_reveals_requested_warning() -> None:
     assert "API response mismatch" in response.message
 
 
+@pytest.mark.parametrize("text", ["무슨 문제 생겼다며?", "어떤 이슈가 있었어?", "무슨 이슈가 발생했는지 알려줘."])
+def test_unavailable_evidence_misclassification_recovers_general_question(text) -> None:
+    class WrongEvidenceIntentProvider:
+        name = "cli"
+        model = "test"
+
+        def classify(self, context):
+            return IntentClassification(
+                intent="request_evidence", question_type="evidence_request",
+                target_npc_id=context.target_hint, evidence_id="qa_warning_message",
+                confidence=0.97,
+            )
+
+    engine = GameEngine(intent_provider=DeterministicIntentProvider())
+    sid = engine.create_session().session_id
+    engine.submit_action(sid, "QA 경고 메시지를 보여줘", target_hint="qa_01")
+    engine.submit_action(sid, "QA 경고 증거를 제시합니다", target_hint="pm_01")
+    engine.submit_action(sid, "우울한 아침!", target_hint="backend_01")
+    engine.intent_provider = WrongEvidenceIntentProvider()
+
+    response = engine.submit_action(sid, text, target_hint="backend_01")
+
+    assert response.classified_action == "ask"
+    assert response.question_type == "general_status"
+    assert response.evidence_id is None
+    assert response.intent_fallback_used is True
+    assert response.snapshot.agent_traces[-1].npc_id == "backend_01"
+    assert response.snapshot.events[-1].event_type == "dialogue"
+    session = engine.get_session(sid)
+    assert session.discovered_evidence == {"qa_warning_message"}
+    assert session.npcs["backend_01"].observed_evidence_ids == []
+    assert "evidence_source_available" in response.snapshot.fallback_notices[-1].reason
+
+
+def test_intent_context_keeps_other_npc_conversations_out_of_current_dialogue() -> None:
+    contexts = []
+
+    class RecordingIntentProvider(DeterministicIntentProvider):
+        def classify(self, context):
+            contexts.append(context)
+            return super().classify(context)
+
+    engine = GameEngine(intent_provider=RecordingIntentProvider())
+    sid = engine.create_session().session_id
+    engine.submit_action(sid, "QA 경고 메시지를 보여줘", target_hint="qa_01")
+    engine.submit_action(sid, "QA 경고 증거를 제시합니다", target_hint="pm_01")
+    engine.submit_action(sid, "우울한 아침!", target_hint="backend_01")
+    engine.submit_action(sid, "무슨 문제 생겼다며?", target_hint="backend_01")
+
+    context = contexts[-1]
+    assert context.discovered_evidence_ids == ("qa_warning_message",)
+    assert context.requestable_evidence_ids == ("api_schema_diff",)
+    assert any("우울한 아침!" in event for event in context.recent_events)
+    assert any("Backend Developer:" in event for event in context.recent_events)
+    assert not any("QA warning message" in event or "QA Engineer:" in event or "PM / Planner:" in event
+                   for event in context.recent_events)
+
+    engine.submit_action(sid, "QA 경고 증거를 제시합니다", target_hint="backend_01")
+    engine.submit_action(sid, "이게 뭐야?", target_hint="backend_01")
+    shared_context = contexts[-1]
+    assert set(shared_context.requestable_evidence_ids) == {"api_schema_diff", "qa_warning_message"}
+    assert any("QA warning message" in event for event in shared_context.recent_events)
+
+
+@pytest.mark.parametrize("target_id", ["qa_01", "backend_01"])
+def test_general_issue_question_does_not_acquire_evidence(target_id) -> None:
+    engine = GameEngine(intent_provider=DeterministicIntentProvider())
+    response = engine.submit_action(
+        engine.create_session().session_id, "어떤 이슈가 있었는지 알려줘.", target_hint=target_id,
+    )
+
+    assert response.classified_action == "ask"
+    assert not any(evidence.discovered for evidence in response.snapshot.evidences)
+    assert response.snapshot.agent_traces[-1].npc_id == target_id
+
+
+def test_unavailable_evidence_request_does_not_substitute_the_npcs_default_document() -> None:
+    class SpecificEvidenceIntentProvider:
+        name = "cli"
+        model = "test"
+
+        def classify(self, context):
+            return IntentClassification(
+                intent="request_evidence", question_type="evidence_request",
+                target_npc_id=context.target_hint, evidence_id="qa_warning_message",
+                reference_scope="explicit", confidence=0.97,
+            )
+
+    engine = GameEngine(intent_provider=SpecificEvidenceIntentProvider())
+    response = engine.submit_action(
+        engine.create_session().session_id, "그 증거를 보여줘.", target_hint="backend_01",
+    )
+
+    assert response.classified_action == "request_evidence"
+    assert response.evidence_id == "qa_warning_message"
+    assert not any(evidence.discovered for evidence in response.snapshot.evidences)
+    assert "제공할 수 없는 증거" in response.message
+
+
 def test_discovered_evidence_followup_explains_without_requesting_same_evidence_again() -> None:
     engine = GameEngine(
         provider=DeterministicDecisionProvider(),

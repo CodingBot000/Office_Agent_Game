@@ -109,10 +109,6 @@ class DeterministicIntentProvider:
                 "오류명",
                 "에러 내용",
                 "오류 내용",
-                "무슨 이슈",
-                "어떤 이슈",
-                "치명적 이슈",
-                "critical issue",
             )
         ):
             if any(keyword in normalized for keyword in ("보여", "보여줘", "보여줄", "확인", "요청", "알려")):
@@ -168,7 +164,7 @@ class DeterministicIntentProvider:
             return self._result("ask", target_npc_id, 0.82, question_type="cause_analysis")
         if any(keyword in normalized for keyword in ("책임", "원인", "잘못", "비난", "accuse", "뒤집어")):
             return self._result("accuse", target_npc_id, 0.8)
-        if any(keyword in normalized for keyword in ("묻", "질문", "알고", "무엇", "왜", "뭐야", "뭐가", "무슨", "알려", "설명", "말해", "궁금", "ask", "question")):
+        if any(keyword in normalized for keyword in ("묻", "질문", "알고", "무엇", "왜", "뭐야", "뭐가", "무슨", "어떤", "알려", "설명", "말해", "궁금", "ask", "question")):
             return self._result("ask", target_npc_id, 0.75, question_type="general_status")
         if any(keyword in normalized for keyword in ("이동", "move", "자리", "회의실로")):
             return self._result("move", target_npc_id, 0.8, location=self._resolve_location(normalized))

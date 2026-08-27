@@ -61,6 +61,7 @@ class IntentContext:
     available_locations: tuple[str, ...]
     available_actions: tuple[str, ...]
     available_evidences: tuple[str, ...] = ()
+    requestable_evidence_ids: tuple[str, ...] = ()
     recent_events: tuple[str, ...] = ()
     latest_discovered_evidence_id: str | None = None
 
