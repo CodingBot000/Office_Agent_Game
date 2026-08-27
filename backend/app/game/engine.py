@@ -124,6 +124,7 @@ UNAVAILABLE_ROLE_REFERENCE_PATTERNS = (
 @dataclass
 class GameSession:
     session_id: str
+    revision: int | None = None
     turn: int = 0
     current_location: str = "meeting_room"
     incident_status: str = "ACTIVE"
@@ -198,8 +199,13 @@ class GameEngine:
         return session
 
     def reset_session(self, session_id: str) -> GameSnapshot:
-        self.session_repository.delete(session_id)
-        return self.create_session()
+        previous = self.get_session(session_id)
+        replacement = GameSession(session_id=str(uuid4()))
+        self._append_event(replacement, "System", "서비스 장애 사건이 시작되었습니다. 현재 상태: ACTIVE.", "system")
+        replacement.revision = self.session_repository.replace(
+            session_id, previous.revision, replacement.session_id, self._serialize_session(replacement)
+        )
+        return self.snapshot(replacement)
 
     def submit_action(
         self,
@@ -613,6 +619,7 @@ class GameEngine:
             )
         return GameSnapshot(
             session_id=session.session_id,
+            revision=session.revision or 0,
             turn=session.turn,
             current_location=session.current_location,
             incident_status=session.incident_status,
@@ -637,7 +644,9 @@ class GameEngine:
         )
 
     def _save_session(self, session: GameSession) -> None:
-        self.session_repository.save(session.session_id, self._serialize_session(session))
+        session.revision = self.session_repository.save(
+            session.session_id, self._serialize_session(session), expected_revision=session.revision
+        )
 
     def _serialize_session(self, session: GameSession) -> dict[str, object]:
         return {
@@ -740,6 +749,7 @@ class GameEngine:
         world_object_payload = payload.get("world_objects", {})
         return GameSession(
             session_id=str(payload["session_id"]),
+            revision=int(payload.get("_revision", 0)),
             turn=int(payload.get("turn", 0)),
             current_location=str(payload.get("current_location", "meeting_room")),
             incident_status=str(payload.get("incident_status", "ACTIVE")),

@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import app
 
@@ -95,3 +96,22 @@ def test_game_action_button_api_picks_up_backend_keyboard() -> None:
     keyboard = next(item for item in payload["snapshot"]["world_objects"] if item["id"] == "backend_keyboard")
     assert keyboard["holder_id"] == "player"
     assert "backend_keyboard" in payload["snapshot"]["player_inventory"]["held_object_ids"]
+
+
+@pytest.mark.parametrize("endpoint, method, payload", [
+    ("actions", "submit_action", {"text": "질문합니다"}),
+    ("game-actions", "submit_game_action", {"action_id": "test"}),
+    ("report", "submit_report", {"primary_cause": "test"}),
+    ("reset", "reset_session", None),
+])
+def test_session_conflicts_return_409(monkeypatch, endpoint, method, payload):
+    from app.main import engine
+    from app.storage import SessionConflictError
+
+    def conflict(*args, **kwargs):
+        raise SessionConflictError("Session changed; reload before retrying.")
+
+    monkeypatch.setattr(engine, method, conflict)
+    response = client.post(f"/api/v1/sessions/test/{endpoint}", json=payload)
+    assert response.status_code == 409
+    assert "reload" in response.json()["detail"]

@@ -408,6 +408,7 @@ class GameSnapshot(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     session_id: str
+    revision: int = 0
     turn: int
     current_location: str
     incident_status: str

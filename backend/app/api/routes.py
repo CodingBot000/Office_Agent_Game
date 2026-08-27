@@ -1,11 +1,12 @@
 from fastapi import APIRouter, HTTPException, status
 
 from app.game.engine import GameEngine, InvalidIntentHintError, SessionNotFoundError
+from app.storage import SessionConflictError
 from app.models import ActionRequest, ActionResponse, GameActionRequest, GameActionResponse, GameSnapshot, IncidentReportRequest
 
 
 def create_router(engine: GameEngine) -> APIRouter:
-    router = APIRouter(tags=["game"])
+    router = APIRouter(tags=["game"], responses={409: {"description": "Session changed; reload before retrying."}})
 
     @router.post("/sessions", response_model=GameSnapshot, status_code=status.HTTP_201_CREATED)
     def start_session() -> GameSnapshot:
@@ -15,6 +16,8 @@ def create_router(engine: GameEngine) -> APIRouter:
     def get_session(session_id: str) -> GameSnapshot:
         try:
             return engine.snapshot(engine.get_session(session_id))
+        except SessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -22,6 +25,8 @@ def create_router(engine: GameEngine) -> APIRouter:
     def submit_action(session_id: str, request: ActionRequest) -> ActionResponse:
         try:
             return engine.submit_action(session_id, request.text, request.intent_hint, request.target_hint)
+        except SessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
         except InvalidIntentHintError as exc:
@@ -31,6 +36,8 @@ def create_router(engine: GameEngine) -> APIRouter:
     def submit_game_action(session_id: str, request: GameActionRequest) -> GameActionResponse:
         try:
             return engine.submit_game_action(session_id, request)
+        except SessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -38,6 +45,8 @@ def create_router(engine: GameEngine) -> APIRouter:
     def submit_report(session_id: str, request: IncidentReportRequest) -> GameSnapshot:
         try:
             return engine.submit_report(session_id, request)
+        except SessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -45,6 +54,8 @@ def create_router(engine: GameEngine) -> APIRouter:
     def reset_session(session_id: str) -> GameSnapshot:
         try:
             return engine.reset_session(session_id)
+        except SessionConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SessionNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Session not found") from exc
 

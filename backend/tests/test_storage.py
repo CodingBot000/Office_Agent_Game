@@ -1,8 +1,10 @@
 import pytest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from app.config import Settings
 from app.game.engine import GameEngine
-from app.storage import SQLiteSessionRepository
+from app.storage import MemorySessionRepository, SQLiteSessionRepository
 
 
 def test_sqlite_repository_restores_session_across_engine_instances(tmp_path) -> None:
@@ -48,7 +50,7 @@ def test_legacy_known_fact_strings_migrate_to_v8_fact_ids(tmp_path, caplog, lega
         "I do not have deployment permission.",
         "Legacy fact without a mapping.",
     ]
-    repository.save(started.session_id, payload)
+    repository.save(started.session_id, payload, expected_revision=payload["_revision"])
 
     restored_engine = GameEngine(settings=settings)
     restored = restored_engine.get_session(started.session_id)
@@ -81,7 +83,7 @@ def test_v3_relationships_migrate_to_v8_directional_graph(tmp_path) -> None:
     payload.pop("relationships", None)
     payload.pop("world_objects", None)
     payload.pop("social_events", None)
-    repository.save(started.session_id, payload)
+    repository.save(started.session_id, payload, expected_revision=payload["_revision"])
 
     restored = GameEngine(settings=settings).get_session(started.session_id)
     migrated_payload = repository.load(started.session_id)
@@ -110,7 +112,7 @@ def test_v4_session_migrates_game_action_inventory_fields_to_v8(tmp_path) -> Non
     payload["schema_version"] = 4
     payload.pop("player_inventory", None)
     payload.pop("game_action_traces", None)
-    repository.save(started.session_id, payload)
+    repository.save(started.session_id, payload, expected_revision=payload["_revision"])
 
     restored = GameEngine(settings=settings).get_session(started.session_id)
     migrated_payload = repository.load(started.session_id)
@@ -120,3 +122,112 @@ def test_v4_session_migrates_game_action_inventory_fields_to_v8(tmp_path) -> Non
     assert restored.game_action_traces == []
     assert restored.world_objects["backend_keyboard"].holder_id is None
     assert restored.world_objects["backend_keyboard"].condition == "normal"
+
+
+@pytest.mark.parametrize("storage", ["memory", "sqlite"])
+def test_concurrent_actions_conflict_without_losing_successful_changes(tmp_path, storage):
+    from app.models import IntentClassification
+    from app.storage import SessionConflictError
+
+    barrier = Barrier(2)
+
+    class ConcurrentIntent:
+        name = "deterministic-mock"
+        model = "test"
+
+        def classify(self, context):
+            barrier.wait(timeout=5)
+            return IntentClassification(intent="talk", target_npc_id="qa_01")
+
+    first_repository = MemorySessionRepository() if storage == "memory" else SQLiteSessionRepository(str(tmp_path / "race.db"))
+    second_repository = first_repository if storage == "memory" else SQLiteSessionRepository(str(tmp_path / "race.db"))
+    engines = [GameEngine(session_repository=repo, intent_provider=ConcurrentIntent()) for repo in (first_repository, second_repository)]
+    sid = engines[0].create_session().session_id
+
+    def submit(index):
+        try:
+            return engines[index].submit_action(sid, f"request {index}")
+        except SessionConflictError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(submit, range(2)))
+    assert sum(response is not None for response in responses) == 1
+    restored = engines[0].get_session(sid)
+    assert restored.turn == 1
+    assert len([event for event in restored.events if event.event_type == "input"]) == 1
+    retry_engine = GameEngine(session_repository=first_repository)
+    retried = retry_engine.submit_action(sid, "재시도")
+    assert retried.snapshot.turn == 2
+    assert retried.snapshot.revision == 3
+
+
+@pytest.mark.parametrize("storage", ["memory", "sqlite"])
+def test_reset_prevents_stale_save_and_is_atomic(tmp_path, storage):
+    from app.storage import SessionConflictError
+
+    repository = MemorySessionRepository() if storage == "memory" else SQLiteSessionRepository(str(tmp_path / "reset.db"))
+    engine = GameEngine(session_repository=repository)
+    sid = engine.create_session().session_id
+    stale = engine.get_session(sid)
+    replacement = engine.reset_session(sid)
+    with pytest.raises(SessionConflictError):
+        engine._save_session(stale)
+    assert repository.load(sid) is None
+    assert engine.get_session(replacement.session_id).turn == 0
+    existing = repository.load(replacement.session_id)
+    with pytest.raises(SessionConflictError):
+        repository.replace(replacement.session_id, existing["_revision"] + 1, "not-created", {})
+    assert repository.load("not-created") is None
+    assert repository.load(replacement.session_id) == existing
+
+
+def test_sqlite_migrates_legacy_database_revision_once(tmp_path):
+    import json
+    import sqlite3
+
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE game_sessions (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+        connection.execute("INSERT INTO game_sessions(session_id, payload) VALUES (?, ?)", ("legacy", json.dumps({"turn": 2})))
+    repository = SQLiteSessionRepository(str(path))
+    assert repository.load("legacy")["_revision"] == 0
+    revision = repository.save("legacy", {"turn": 3}, expected_revision=0)
+    reopened = SQLiteSessionRepository(str(path))
+    assert reopened.load("legacy") == {"turn": 3, "_revision": revision}
+
+
+@pytest.mark.parametrize("operation", ["reset", "report"])
+def test_inflight_action_cannot_overwrite_reset_or_completed_report(operation):
+    from threading import Event
+    from app.models import IntentClassification, IncidentReportRequest
+    from app.storage import SessionConflictError
+
+    entered, release = Event(), Event()
+
+    class WaitingIntent:
+        name = "deterministic-mock"
+        model = "test"
+
+        def classify(self, context):
+            entered.set()
+            assert release.wait(timeout=5)
+            return IntentClassification(intent="talk", target_npc_id="qa_01")
+
+    engine = GameEngine(intent_provider=WaitingIntent())
+    sid = engine.create_session().session_id
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(engine.submit_action, sid, "늦게 끝나는 질문")
+        try:
+            assert entered.wait(timeout=5)
+            result = engine.reset_session(sid) if operation == "reset" else engine.submit_report(sid, IncidentReportRequest(primary_cause="API schema 변경"))
+        finally:
+            release.set()
+        with pytest.raises(SessionConflictError):
+            pending.result(timeout=5)
+    if operation == "reset":
+        assert engine.session_repository.load(sid) is None
+        assert engine.get_session(result.session_id).turn == 0
+    else:
+        assert engine.get_session(sid).completed
+        assert all(event.message != "늦게 끝나는 질문" for event in engine.get_session(sid).events)
