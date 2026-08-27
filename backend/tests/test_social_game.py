@@ -5,6 +5,24 @@ from app.models import GameActionRequest, IntentClassification, SocialImpactClas
 from app.providers.base import ProviderError
 
 
+def test_player_owned_object_does_not_create_player_self_relationship():
+    class OwnedObjectProvider:
+        name = "cli"
+        model = "test"
+
+        def classify_social_impact(self, context):
+            return SocialImpactClassification(action_family="support", direct_target_ids=["qa_01"],
+                object_id="americano_coupon", severity=2, intentionality="deliberate", observable=True,
+                evidence_based=False, reason_codes=["support"])
+
+    engine = GameEngine(intent_provider=SocialIntentProvider(), social_impact_provider=OwnedObjectProvider())
+    response = engine.submit_action(engine.create_session().session_id, "커피 쿠폰을 언급하며 QA를 격려합니다")
+    effects = response.snapshot.social_events[-1].policy_outcome.relationship_effects
+    assert effects
+    assert all(effect.source_id != effect.target_id for effect in effects)
+    assert all(effect.source_id != "player" for effect in effects)
+
+
 class SocialIntentProvider:
     name = "cli"
     model = "gpt-5.6-luna"

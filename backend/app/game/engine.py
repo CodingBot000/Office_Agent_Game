@@ -25,6 +25,7 @@ from app.game.seed import (
     STARTER_ITEM_IDS,
 )
 from app.game.relationship_policy import RelationshipPolicyEngine
+from app.game.state_transitions import change_relationship, npc_response_block
 from app.game.action_registry import build_available_game_actions, build_player_inventory
 from app.game.seed import NPC_HOME_LOCATIONS
 from app.game.social_rules import (
@@ -1083,7 +1084,7 @@ class GameEngine:
             power_abuse="power_abuse" in classification.reason_codes,
             turn=session.turn,
         )
-        outcome_checks = self._validate_social_outcome(classification, outcome)
+        outcome_checks = self._validate_social_outcome(session, classification, outcome)
         guardrails.extend(outcome_checks)
         if any(not check.passed for check in outcome_checks):
             failed_checks = ", ".join(check.name for check in outcome_checks if not check.passed)
@@ -1276,6 +1277,7 @@ class GameEngine:
 
     def _validate_social_outcome(
         self,
+        session: GameSession,
         classification: SocialImpactClassification,
         outcome: SocialPolicyOutcome,
     ) -> list[GuardrailCheck]:
@@ -1319,6 +1321,16 @@ class GameEngine:
             if "witness" in effect.reason_codes
         )
         return [
+            GuardrailCheck(
+                name="policy_entities_valid",
+                passed=all(
+                    effect.source_id in session.npcs
+                    and effect.source_id != effect.target_id
+                    and relationship_key(effect.source_id, effect.target_id) in session.relationships
+                    for effect in outcome.relationship_effects
+                ) and all(effect.npc_id in session.npcs for effect in [*outcome.emotion_effects, *outcome.memory_effects]),
+                detail="Policy effects reference actual NPCs and existing non-self edges.",
+            ),
             GuardrailCheck(
                 name="policy_direction_valid",
                 passed=direction_valid,
@@ -1368,27 +1380,13 @@ class GameEngine:
                 trust_ceiling = None
                 fear_floor = 0
 
-            trust = max(-100, min(100, edge.trust + effect.trust_delta))
-            if trust_ceiling is not None:
-                trust = min(trust, trust_ceiling)
-            fear = max(fear_floor, min(100, edge.fear + effect.fear_delta))
-            updated = edge.model_copy(
-                update={
-                    "trust": trust,
-                    "tension": max(0, min(100, edge.tension + effect.tension_delta)),
-                    "respect": max(-100, min(100, edge.respect + effect.respect_delta)),
-                    "fear": fear,
-                    "grievance": max(0, min(100, edge.grievance + effect.grievance_delta)),
-                    "repair_stage": repair_stage,
-                    "trust_ceiling": trust_ceiling,
-                    "fear_floor": fear_floor,
-                    "last_changed_turn": session.turn,
-                }
+            change_relationship(
+                session, effect.source_id, effect.target_id,
+                trust_delta=effect.trust_delta, tension_delta=effect.tension_delta,
+                respect_delta=effect.respect_delta, fear_delta=effect.fear_delta,
+                grievance_delta=effect.grievance_delta,
+                policy_updates={"repair_stage": repair_stage, "trust_ceiling": trust_ceiling, "fear_floor": fear_floor},
             )
-            session.relationships[edge_id] = updated
-            if effect.source_id in session.npcs and effect.target_id == "player":
-                npc = session.npcs[effect.source_id]
-                npc.dynamic_state = npc.dynamic_state.model_copy(update={"trust_toward_player": updated.trust})
 
         for effect in outcome.emotion_effects:
             npc = session.npcs[effect.npc_id]
@@ -1591,6 +1589,9 @@ class GameEngine:
         if npc is None:
             return evidence.content
 
+        blocked = self._check_npc_response(session, npc)
+        if blocked:
+            return blocked
         presentation_count = self._evidence_presentation_count(session, target, evidence.title)
         policy = self._evidence_presentation_policy(session, npc, evidence, presentation_count)
         self._append_event(session, "Player", f"{npc.name}에게 {evidence.title}를 제시했습니다.", "evidence", target)
@@ -1744,7 +1745,6 @@ class GameEngine:
             ),
             "fallback_dialogue": "제시된 증거를 확인했습니다. 이 내용이 어떻게 처리됐는지 함께 확인해 보겠습니다.",
         }
-        return evidence.content
 
     def _request_evidence(
         self,
@@ -1753,6 +1753,11 @@ class GameEngine:
         evidence_id: str | None,
         text: str,
     ) -> str:
+        npc = session.npcs.get(target_id or "")
+        if npc is not None:
+            blocked = self._check_npc_response(session, npc)
+            if blocked:
+                return blocked
         evidence_id = evidence_id or DEFAULT_EVIDENCE_BY_SOURCE_NPC.get(target_id or "") or "qa_warning_message"
         self._discover_evidence(session, evidence_id)
         evidence = session.evidences[evidence_id]
@@ -1778,10 +1783,9 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "대화할 NPC를 찾지 못했습니다.", "guardrail")
             return "대화할 NPC를 찾지 못했습니다."
-        if npc.physical_state == "comatose":
-            return self._record_comatose_response(session, npc)
-        if target_id in session.dialogue_refused_npc_ids:
-            return self._record_dialogue_refusal(session, npc)
+        blocked = self._check_npc_response(session, npc)
+        if blocked:
+            return blocked
         decision, provider_fallback = self._request_decision(session, npc, "talk", player_input, intent)
         applied_decision = self._apply_decision(
             session,
@@ -1805,10 +1809,9 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "질문할 NPC를 찾지 못했습니다.", "guardrail")
             return "질문할 NPC를 찾지 못했습니다."
-        if npc.physical_state == "comatose":
-            return self._record_comatose_response(session, npc)
-        if target_id in session.dialogue_refused_npc_ids:
-            return self._record_dialogue_refusal(session, npc)
+        blocked = self._check_npc_response(session, npc)
+        if blocked:
+            return blocked
         decision, provider_fallback = self._request_decision(session, npc, "ask", player_input, intent)
         applied_decision = self._apply_decision(
             session,
@@ -1826,10 +1829,9 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "책임을 물을 NPC를 찾지 못했습니다.", "guardrail")
             return "책임을 물을 NPC를 찾지 못했습니다."
-        if npc.physical_state == "comatose":
-            return self._record_comatose_response(session, npc)
-        if target_id in session.dialogue_refused_npc_ids:
-            return self._record_dialogue_refusal(session, npc)
+        blocked = self._check_npc_response(session, npc)
+        if blocked:
+            return blocked
         decision, provider_fallback = self._request_decision(session, npc, "accuse", player_input)
         applied_decision = self._apply_decision(
             session,
@@ -1850,10 +1852,9 @@ class GameEngine:
         if npc is None:
             self._append_event(session, "System", "옹호할 NPC를 찾지 못했습니다.", "guardrail")
             return "옹호할 NPC를 찾지 못했습니다."
-        if npc.physical_state == "comatose":
-            return self._record_comatose_response(session, npc)
-        if target_id in session.dialogue_refused_npc_ids:
-            return self._record_dialogue_refusal(session, npc)
+        blocked = self._check_npc_response(session, npc)
+        if blocked:
+            return blocked
         decision, provider_fallback = self._request_decision(session, npc, "defend", player_input)
         applied_decision = self._apply_decision(
             session,
@@ -1865,14 +1866,10 @@ class GameEngine:
         self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
         return applied_decision.dialogue
 
-    def _record_dialogue_refusal(self, session: GameSession, npc: NPCState) -> str:
-        message = "심각한 갈등 사건이 해결되지 않아 현재 정상적인 대화를 거부합니다. 사과, 피해 복구, 중재가 필요합니다."
-        self._append_event(session, npc.name, message, "policy", npc.id)
-        return message
-
-    def _record_comatose_response(self, session: GameSession, npc: NPCState) -> str:
-        message = f"{npc.name}은(는) 혼수상태로 답변할 수 없습니다."
-        self._append_event(session, npc.name, message, "policy", npc.id)
+    def _check_npc_response(self, session: GameSession, npc: NPCState) -> str | None:
+        message = npc_response_block(npc, session.dialogue_refused_npc_ids)
+        if message:
+            self._append_event(session, npc.name, message, "policy", npc.id)
         return message
 
     def _request_decision(
@@ -2046,10 +2043,7 @@ class GameEngine:
             fallback_used = False
 
         npc.dynamic_state = self._bounded_dynamic_state(npc.dynamic_state, trace_decision)
-        player_relationship = session.relationships[relationship_key(npc.id, "player")]
-        session.relationships[relationship_key(npc.id, "player")] = player_relationship.model_copy(
-            update={"trust": npc.dynamic_state.trust_toward_player, "last_changed_turn": session.turn}
-        )
+        change_relationship(session, npc.id, "player", trust_delta=trace_decision.trust_delta)
         for belief in trace_decision.belief_updates:
             self._upsert_belief(npc, belief)
         for relationship_update in trace_decision.relationship_updates:
@@ -2091,7 +2085,7 @@ class GameEngine:
         return [
             GuardrailCheck(
                 name="npc_exists",
-                passed=decision.npc_id in session.npcs,
+                passed=decision.npc_id == npc.id and npc.id in session.npcs,
                 detail="NPC exists in the current session.",
             ),
             GuardrailCheck(
@@ -2111,7 +2105,12 @@ class GameEngine:
             ),
             GuardrailCheck(
                 name="relationship_targets_valid",
-                passed=all(update.target_npc_id in session.npcs for update in decision.relationship_updates),
+                passed=all(
+                    update.target_npc_id in session.npcs
+                    and update.target_npc_id != npc.id
+                    and relationship_key(npc.id, update.target_npc_id) in session.relationships
+                    for update in decision.relationship_updates
+                ) and len({update.target_npc_id for update in decision.relationship_updates}) == len(decision.relationship_updates),
                 detail="Relationship updates reference NPCs in the current session.",
             ),
             GuardrailCheck(
@@ -2162,7 +2161,7 @@ class GameEngine:
         return DynamicState(
             emotion=decision.emotion,
             stress=max(0, min(100, state.stress + decision.stress_delta)),
-            trust_toward_player=max(-100, min(100, state.trust_toward_player + decision.trust_delta)),
+            trust_toward_player=state.trust_toward_player,
             cooperation=max(0, min(100, state.cooperation + decision.cooperation_delta)),
         )
 
@@ -2174,85 +2173,8 @@ class GameEngine:
         npc.beliefs.append(belief)
 
     def _apply_relationship_update(self, session: GameSession, npc: NPCState, update: RelationshipUpdate) -> None:
-        for index, relationship in enumerate(npc.relationships):
-            if relationship.target_npc_id == update.target_npc_id:
-                npc.relationships[index] = Relationship(
-                    target_npc_id=relationship.target_npc_id,
-                    trust=max(-100, min(100, relationship.trust + update.trust_delta)),
-                    tension=max(0, min(100, relationship.tension + update.tension_delta)),
-                )
-                break
-        else:
-            npc.relationships.append(
-                Relationship(
-                    target_npc_id=update.target_npc_id,
-                    trust=max(-100, min(100, update.trust_delta)),
-                    tension=max(0, min(100, update.tension_delta)),
-                )
-            )
-
-        edge_id = relationship_key(npc.id, update.target_npc_id)
-        edge = session.relationships[edge_id]
-        session.relationships[edge_id] = edge.model_copy(
-            update={
-                "trust": max(-100, min(100, edge.trust + update.trust_delta)),
-                "tension": max(0, min(100, edge.tension + update.tension_delta)),
-                "last_changed_turn": session.turn,
-            }
-        )
-
-    def _update_backend_after_warning(self, session: GameSession) -> None:
-        backend = session.npcs["backend_01"]
-        belief = Belief(
-            subject="incident",
-            belief="The ignored QA warning and API schema change jointly enabled the outage.",
-            confidence=0.85,
-        )
-        self._upsert_belief(backend, belief)
-        backend.dynamic_state = backend.dynamic_state.model_copy(
-            update={
-                "emotion": "uneasy",
-                "stress": min(100, backend.dynamic_state.stress + 8),
-                "trust_toward_player": min(100, backend.dynamic_state.trust_toward_player + 3),
-            }
-        )
-        player_relationship = session.relationships[relationship_key(backend.id, "player")]
-        session.relationships[relationship_key(backend.id, "player")] = player_relationship.model_copy(
-            update={"trust": backend.dynamic_state.trust_toward_player, "last_changed_turn": session.turn}
-        )
-        backend.recent_memories.append(
-            Memory(summary="Player showed the QA warning message during the incident review.", importance=0.7, turn=session.turn)
-        )
-        backend.recent_memories = backend.recent_memories[-8:]
-        session.agent_traces.append(
-            AgentTrace(
-                id=len(session.agent_traces) + 1,
-                turn=session.turn,
-                event="Player showed QA warning evidence to Backend Developer.",
-                npc_id=backend.id,
-                provider=self.provider.name,
-                context_summary="Backend Developer evaluated newly revealed evidence against its existing belief.",
-                known_fact_ids=list(backend.known_fact_ids),
-                known_facts=list(backend.known_facts),
-                retrieved_rules=list(INCIDENT_RULES),
-                decision=AgentDecision(
-                    npc_id=backend.id,
-                    emotion=backend.dynamic_state.emotion,
-                    stress_delta=8,
-                    trust_delta=3,
-                    cooperation_delta=0,
-                    belief_updates=[belief],
-                    knowledge_refs=["qa_sent_warning", "backend_changed_api_schema"],
-                    action_type="belief_update",
-                    dialogue="QA warning evidence와 API schema 변경의 연관성을 새롭게 반영했습니다.",
-                ),
-                guardrails=[
-                    GuardrailCheck(name="npc_exists", passed=True, detail="NPC exists in the current session."),
-                    GuardrailCheck(name="evidence_exists", passed=True, detail="Evidence exists in the current session."),
-                    GuardrailCheck(name="state_ranges_valid", passed=True, detail="State remains within allowed ranges."),
-                ],
-            )
-        )
+        change_relationship(session, npc.id, update.target_npc_id,
+                            trust_delta=update.trust_delta, tension_delta=update.tension_delta)
 
     def _discover_evidence(self, session: GameSession, evidence_id: str) -> None:
         if evidence_id in session.evidences:

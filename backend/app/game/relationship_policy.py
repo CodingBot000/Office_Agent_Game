@@ -50,6 +50,7 @@ class RelationshipPolicyEngine:
             self._assign_role(role_by_npc, [object_owner_id], "owner")
         self._assign_role(role_by_npc, affected_target_ids, "affected")
         self._assign_role(role_by_npc, witness_ids, "witness")
+        role_by_npc.pop(actor_id, None)
 
         effects: list[RelationshipEffect] = []
         emotions: list[EmotionEffect] = []

@@ -6,6 +6,48 @@ from app.models import AgentDecision, FactDefinition, IncidentReportRequest, Int
 from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
 
 
+def test_self_relationship_decision_is_rejected_before_state_changes():
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    npc = session.npcs["qa_01"]
+    before = npc.model_dump()
+    candidate = AgentDecision(npc_id=npc.id, emotion="happy", stress_delta=-10, trust_delta=20,
+        cooperation_delta=10, action_type="dialogue", grounding_type="acknowledgement", dialogue="test",
+        relationship_updates=[RelationshipUpdate(target_npc_id=npc.id, trust_delta=20)])
+    engine._apply_decision(session, npc, candidate, "invalid self relationship")
+    assert npc.model_dump() == before
+    assert session.agent_traces[-1].fallback_used
+
+
+def test_repeated_defense_respects_existing_trust_ceiling():
+    engine = GameEngine()
+    sid = engine.create_session().session_id
+    engine.submit_action(sid, "QA에게 해고시켜 버린다고 위협한다", target_hint="qa_01")
+    for _ in range(8):
+        response = engine.submit_action(sid, "QA를 옹호합니다", target_hint="qa_01")
+    edge = next(e for e in response.snapshot.relationships if e.source_id == "qa_01" and e.target_id == "player")
+    npc = next(n for n in response.snapshot.npcs if n.id == "qa_01")
+    assert edge.trust <= edge.trust_ceiling == 20
+    assert edge.trust == npc.dynamic_state.trust_toward_player
+    assert edge.repair_stage == "none"
+
+
+def test_comatose_npc_cannot_reveal_or_acknowledge_evidence():
+    from app.models import GameActionRequest
+
+    engine = GameEngine()
+    sid = engine.create_session().session_id
+    engine.submit_game_action(sid, GameActionRequest(action_id="throw_representative_person_at_qa_01"))
+    response = engine.submit_action(sid, "QA 경고 메시지를 보여줘", target_hint="qa_01")
+    assert "혼수상태" in response.message
+    assert not any(e.discovered for e in response.snapshot.evidences)
+    session = engine.get_session(sid)
+    session.discovered_evidence.add("qa_warning_message")
+    engine._save_session(session)
+    response = engine.submit_action(sid, "경고 증거를 QA에게 제시합니다", target_hint="qa_01")
+    assert "혼수상태" in response.message
+
+
 class FixedIntentProvider:
     name = "cli"
     model = "gpt-5.5"
