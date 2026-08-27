@@ -59,6 +59,8 @@ def build_decision_prompt(context: DecisionContext) -> str:
                 "content": context.referenced_evidence_content,
             },
             "responsibility_map": context.responsibility_map,
+            "visible_evidences": [evidence.model_dump(mode="json") for evidence in context.visible_evidences],
+            "available_npcs": context.available_npcs,
             "recent_events": context.recent_events,
             "incident_rules": context.incident_rules,
         },
@@ -82,11 +84,11 @@ Rules:
   private canonical knowledge unless the supporting Fact ID is also in available_facts.
 - Keep action_type within this vocabulary: dialogue, show_evidence, belief_update.
 - action_target must be null or one of the supplied NPC/evidence IDs.
-- When mode is talk or ask and question_type is not evidence_followup, do not disclose evidence
-  content, exact error names, stack traces, or protected warning text. Give a short progress summary.
-- When question_type=evidence_followup, explain only referenced_evidence. The backend supplies its
-  content only after verifying that the Player already discovered it. Do not ask the Player to
-  request that same evidence again.
+- visible_evidences contains documents both the NPC and Player can access. Explain and compare those
+  documents across all question types. Never disclose another document's private content.
+  Mentioning a public document title alone is not a disclosure of its contents.
+- Cite document claims in evidence_refs using visible_evidences IDs. When referring to a known fact,
+  also include its supporting ID in knowledge_refs. Do not ask for evidence already visible here.
 - When mode is show_evidence, acknowledge the supplied evidence and reaction policy.
   Do not invent evidence content, additional actors, or unsupported consequences.
   Never deny or contradict a supplied known fact. If the known facts say that a
@@ -95,10 +97,9 @@ Rules:
 - When question_type=responsibility_routing, answer from responsibility_map and include supporting
   responsibility Fact IDs in knowledge_refs. Distinguish deployment execution, API contract changes,
   schedule pressure, and QA verification. Do not answer that the NPC cannot identify the owner.
-- Team Lead is a background approval fact, not an available NPC in this game.
-  Never tell the player to find or contact Team Lead. Route schedule and
-  approval questions to PM / Planner and technical execution questions to
-  Backend Developer.
+- When suggesting someone to contact, put their actual available NPC ID in contact_npc_ids.
+  Do not invent a contact. Background or negated mentions of roles need no contact entry.
+  Route questions using available_npcs and responsibility_map, not assumed roles.
 - Use the NPC's personality, dynamic state, beliefs, relationships, and memories.
 - Keep dialogue short, natural, and grounded only in the supplied context.
 
@@ -136,6 +137,8 @@ Rules:
 - Set question_type to the semantic purpose of the message. Use none for commands with no question.
 - Set reference_scope=explicit when the message directly identifies evidence. Use latest_discovered
   or conversation_context when pronouns or conversational references point to evidence already shown.
+- Put all referenced evidence IDs in referenced_evidence_ids when comparing multiple documents.
+  Keep evidence_id as the first reference for backward compatibility.
 - Use question_type=evidence_followup with intent=ask when the Player asks for meaning, importance,
   cause, or explanation of already discovered evidence. Resolve evidence_id from discovered evidence
   and recent_events. Do not classify it as a new evidence request.

@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 from app.config import Settings
-from app.game.engine import GameEngine
+from app.game.engine import CURRENT_SESSION_SCHEMA_VERSION, GameEngine
 from app.storage import MemorySessionRepository, SQLiteSessionRepository
 
 
@@ -61,7 +61,7 @@ def test_legacy_known_fact_strings_migrate_to_v8_fact_ids(tmp_path, caplog, lega
         "qa_sent_warning",
         "qa_has_no_deploy_permission",
     ]
-    assert migrated_payload["schema_version"] == 8
+    assert migrated_payload["schema_version"] == CURRENT_SESSION_SCHEMA_VERSION
     assert restored.npcs["qa_01"].is_fallen is False
     assert restored.npcs["qa_01"].physical_state == "normal"
     assert "session_migration_unmapped_fact" in caplog.text
@@ -89,7 +89,7 @@ def test_v3_relationships_migrate_to_v8_directional_graph(tmp_path) -> None:
     migrated_payload = repository.load(started.session_id)
 
     assert migrated_payload is not None
-    assert migrated_payload["schema_version"] == 8
+    assert migrated_payload["schema_version"] == CURRENT_SESSION_SCHEMA_VERSION
     assert restored.relationships["qa_01->player"].trust == 15
     assert restored.relationships["qa_01->backend_01"].tension == 60
     assert restored.relationships["player->qa_01"].trust == 0
@@ -118,7 +118,7 @@ def test_v4_session_migrates_game_action_inventory_fields_to_v8(tmp_path) -> Non
     migrated_payload = repository.load(started.session_id)
 
     assert migrated_payload is not None
-    assert migrated_payload["schema_version"] == 8
+    assert migrated_payload["schema_version"] == CURRENT_SESSION_SCHEMA_VERSION
     assert restored.game_action_traces == []
     assert restored.world_objects["backend_keyboard"].holder_id is None
     assert restored.world_objects["backend_keyboard"].condition == "normal"
@@ -231,3 +231,19 @@ def test_inflight_action_cannot_overwrite_reset_or_completed_report(operation):
     else:
         assert engine.get_session(sid).completed
         assert all(event.message != "늦게 끝나는 질문" for event in engine.get_session(sid).events)
+
+
+def test_observed_evidence_and_provenance_survive_sqlite_restart(tmp_path):
+    from app.game.evidence_policy import available_fact_ids
+
+    repository = SQLiteSessionRepository(str(tmp_path / "observations.db"))
+    engine = GameEngine(session_repository=repository)
+    sid = engine.create_session().session_id
+    engine.submit_action(sid, "QA 경고 메시지를 보여줘", target_hint="qa_01")
+    engine.submit_action(sid, "QA 경고 증거를 제시합니다", target_hint="backend_01")
+    restarted = GameEngine(session_repository=SQLiteSessionRepository(str(tmp_path / "observations.db")))
+    session = restarted.get_session(sid)
+    assert "qa_sent_warning" in available_fact_ids(session, session.npcs["backend_01"])
+    assert "team_lead_did_not_confirm_warning" not in available_fact_ids(session, session.npcs["backend_01"])
+    assert "qa_warning_message" not in session.npcs["frontend_01"].observed_evidence_ids
+    assert restarted._evidence_presentation_count(session, "backend_01", "qa_warning_message") == 1

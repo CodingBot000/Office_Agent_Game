@@ -285,6 +285,7 @@ class NPCState(BaseModel):
     is_fallen: bool = False
     known_fact_ids: list[str] = Field(default_factory=list)
     known_facts: list[str] = Field(default_factory=list)
+    observed_evidence_ids: list[str] = Field(default_factory=list)
     beliefs: list[Belief] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
     recent_memories: list[Memory] = Field(default_factory=list)
@@ -317,6 +318,9 @@ class EventLogEntry(BaseModel):
     actor_id: str | None = None
     message: str
     event_type: str = "dialogue"
+    evidence_id: str | None = None
+    recipient_npc_id: str | None = None
+    evidence_operation: Literal["discovered", "presented", "response"] | None = None
     created_at: datetime
 
 
@@ -336,6 +340,8 @@ class AgentDecision(BaseModel):
     relationship_updates: list[RelationshipUpdate] = Field(default_factory=list)
     grounding_type: Literal["fact", "belief", "acknowledgement"] = "fact"
     knowledge_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    contact_npc_ids: list[str] = Field(default_factory=list)
     memory_candidate: Memory | None = None
     action_type: str
     action_target: str | None = None
@@ -350,6 +356,7 @@ class IntentClassification(BaseModel):
     reference_scope: ReferenceScope = "none"
     target_npc_id: str | None = None
     evidence_id: str | None = None
+    referenced_evidence_ids: list[str] = Field(default_factory=list)
     location: Literal["meeting_room", "dev_area", "qa_desk", "pm_desk"] | None = None
     confidence: float = Field(default=0.5, ge=0, le=1)
 

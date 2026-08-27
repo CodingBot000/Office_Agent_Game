@@ -1,9 +1,112 @@
 import logging
+import pytest
 
 from app.game import engine as engine_module
 from app.game.engine import AVAILABLE_ACTIONS, GameEngine
 from app.models import AgentDecision, FactDefinition, IncidentReportRequest, IntentClassification, Memory, RelationshipUpdate
 from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
+
+
+@pytest.mark.parametrize("dialogue", [
+    "이미 확보한 QA warning message와 API schema diff를 함께 확인하겠습니다.",
+    "Team Lead는 대화 대상이 아니므로 PM에게 승인 경위를 확인해 주세요.",
+])
+def test_visible_evidence_titles_and_background_role_mentions_are_allowed(dialogue):
+    class ContextualProvider:
+        name = "openai"
+        model = "test"
+
+        def decide(self, context):
+            return AgentDecision(npc_id=context.npc.id, emotion="calm", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, action_type="dialogue", grounding_type="acknowledgement", dialogue=dialogue)
+
+    engine = GameEngine(provider=ContextualProvider(), intent_provider=FixedIntentProvider())
+    session = engine.get_session(engine.create_session().session_id)
+    session.discovered_evidence.update(["qa_warning_message", "api_schema_diff"])
+    engine._save_session(session)
+    response = engine.submit_action(session.session_id, "두 증거에 관해 설명해 주세요.")
+    assert response.message == dialogue
+    assert not response.snapshot.agent_traces[-1].fallback_used
+
+
+def test_shared_evidence_facts_survive_reload_without_teaching_other_npcs():
+    class SharedFactProvider:
+        name = "openai"
+        model = "test"
+
+        def decide(self, context):
+            return AgentDecision(npc_id=context.npc.id, emotion="calm", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, action_type="dialogue", grounding_type="fact",
+                knowledge_refs=["qa_sent_warning"], dialogue="QA가 배포 전에 경고를 보낸 사실을 확인했습니다.")
+
+    engine = GameEngine()
+    sid = engine.create_session().session_id
+    engine.submit_action(sid, "QA 경고 메시지를 보여줘", target_hint="qa_01")
+    engine.submit_action(sid, "QA 경고 증거를 제시합니다", target_hint="backend_01")
+    engine.provider = SharedFactProvider()
+    response = engine.submit_action(sid, "방금 확인한 내용이 뭐야?", target_hint="backend_01")
+    assert not response.snapshot.agent_traces[-1].fallback_used
+    restored = engine.get_session(sid)
+    assert "qa_warning_message" in restored.npcs["backend_01"].observed_evidence_ids
+    assert "qa_warning_message" not in restored.npcs["frontend_01"].observed_evidence_ids
+    candidate = SharedFactProvider().decide(type("Context", (), {"npc": restored.npcs["frontend_01"]})())
+    assert not next(check for check in engine._validate_decision(restored, restored.npcs["frontend_01"], candidate)
+                    if check.name == "knowledge_refs_known_by_npc").passed
+
+
+def test_npc_cannot_reveal_another_npcs_unobserved_evidence():
+    engine = GameEngine()
+    response = engine.submit_action(engine.create_session().session_id, "QA 경고 메시지를 보여줘", target_hint="frontend_01")
+    assert not any(e.discovered for e in response.snapshot.evidences)
+    assert "제공할 수 없는 증거" in response.message
+
+
+def test_comparison_context_includes_only_documents_observed_by_the_npc():
+    class ComparisonIntent:
+        name = "cli"
+        model = "test"
+
+        def classify(self, context):
+            return IntentClassification(intent="ask", question_type="evidence_followup", target_npc_id="qa_01",
+                referenced_evidence_ids=["qa_warning_message", "api_schema_diff"])
+
+    class ComparisonProvider:
+        name = "cli"
+        model = "test"
+
+        def decide(self, context):
+            assert {e.id for e in context.visible_evidences} == {"qa_warning_message", "api_schema_diff"}
+            assert "api_response_contract_changed" in context.npc.known_fact_ids
+            return AgentDecision(npc_id=context.npc.id, emotion="focused", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, action_type="dialogue", grounding_type="fact",
+                knowledge_refs=["qa_sent_warning", "api_response_contract_changed"],
+                evidence_refs=["qa_warning_message", "api_schema_diff"],
+                dialogue="QA warning message와 API schema diff에 기록된 응답 계약 변경을 비교했습니다.")
+
+    engine = GameEngine()
+    sid = engine.create_session().session_id
+    engine.submit_action(sid, "QA 경고 메시지를 보여줘", target_hint="qa_01")
+    engine.submit_action(sid, "API 스키마 증거를 보여줘", target_hint="backend_01")
+    engine.submit_action(sid, "API 스키마 증거를 제시합니다", target_hint="qa_01")
+    engine.submit_action(sid, "일정 증거를 보여줘", target_hint="pm_01")
+    engine.provider = ComparisonProvider()
+    engine.intent_provider = ComparisonIntent()
+    response = engine.submit_action(sid, "두 자료를 비교해줘")
+    assert not response.snapshot.agent_traces[-1].fallback_used
+
+
+def test_evidence_history_uses_ids_even_when_display_text_changes():
+    engine = GameEngine()
+    session = engine.get_session(engine.create_session().session_id)
+    session.discovered_evidence.update(["qa_warning_message", "api_schema_diff"])
+    engine._append_event(session, "System", "표시 문구 변경", "evidence", evidence_id="qa_warning_message", evidence_operation="discovered")
+    assert engine._latest_discovered_evidence_id(session) == "qa_warning_message"
+    engine._show_evidence(session, "backend_01", "qa_warning_message")
+    for event in session.events:
+        event.message = "translated"
+    before = session.npcs["backend_01"].dynamic_state.model_dump()
+    engine._show_evidence(session, "backend_01", "qa_warning_message")
+    assert session.npcs["backend_01"].dynamic_state.model_dump() == before
 
 
 def test_self_relationship_decision_is_rejected_before_state_changes():
@@ -266,6 +369,7 @@ def test_unavailable_team_lead_reference_is_replaced_with_available_role_guidanc
                 knowledge_refs=list(npc.known_fact_ids),
                 action_type="dialogue",
                 dialogue="정확한 승인 경위는 Team Lead에게 먼저 확인해 주세요.",
+                contact_npc_ids=["team_lead"],
             )
 
     engine = GameEngine(

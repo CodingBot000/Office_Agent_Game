@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.models import AgentDecision, IntentClassification, NPCState, SocialImpactClassification
+from app.models import AgentDecision, Evidence, IntentClassification, NPCState, SocialImpactClassification
 
 
 class ProviderError(RuntimeError):
@@ -27,6 +27,8 @@ class DecisionContext:
     referenced_evidence_summary: str | None = None
     referenced_evidence_content: str | None = None
     responsibility_map: tuple[str, ...] = ()
+    visible_evidences: tuple[Evidence, ...] = ()
+    available_npcs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

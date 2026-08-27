@@ -26,6 +26,10 @@ from app.game.seed import (
 )
 from app.game.relationship_policy import RelationshipPolicyEngine
 from app.game.state_transitions import change_relationship, npc_response_block
+from app.game.evidence_policy import (
+    available_fact_ids, can_provide_evidence, observe_evidence, visible_evidence_ids,
+    evidence_id_from_event, latest_evidence_id, presentation_count,
+)
 from app.game.action_registry import build_available_game_actions, build_player_inventory
 from app.game.seed import NPC_HOME_LOCATIONS
 from app.game.social_rules import (
@@ -87,7 +91,7 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 8
+CURRENT_SESSION_SCHEMA_VERSION = 9
 GAME_ACTION_ALERT = "Use the provided action buttons to perform game actions."
 
 
@@ -114,13 +118,6 @@ KNOWN_FACT_CONTRADICTION_PATTERNS = {
         r"(?:api\s+)?schema\s+was not\s+changed",
     ),
 }
-
-UNAVAILABLE_ROLE_REFERENCE_PATTERNS = (
-    r"team\s*lead",
-    r"teamlead",
-    r"팀\s*리더",
-    r"팀\s*리드",
-)
 
 @dataclass
 class GameSession:
@@ -256,7 +253,7 @@ class GameEngine:
         # Explicit UI hints already have a visible pending state, so persisting
         # the raw button command would duplicate the movement confirmation.
         if intent_hint is None:
-            self._append_event(session, "Player", text.strip(), "input")
+            self._append_event(session, "Player", text.strip(), "input", recipient_npc_id=intent.target_npc_id)
         message = self._handle_action(session, intent, text)
         if session.blocked_action_alert:
             alert = session.blocked_action_alert
@@ -376,7 +373,8 @@ class GameEngine:
             self._discover_evidence(session, world_object.evidence_id)
             evidence = session.evidences[world_object.evidence_id]
             message = evidence.content
-            self._append_event(session, "Player", f"Evidence 확인: {evidence.title}", "evidence")
+            self._append_event(session, "Player", f"Evidence 확인: {evidence.title}", "evidence",
+                               evidence_id=evidence.id, evidence_operation="discovered")
         elif action.family == "pick_up_object":
             world_object = world_object.model_copy(update={"holder_id": "player"})
             session.world_objects[world_object.id] = world_object
@@ -839,7 +837,9 @@ class GameEngine:
         updates: dict[str, object] = {}
         question_type = candidate.question_type
         reference_scope = candidate.reference_scope
-        evidence_id = candidate.evidence_id
+        evidence_id = candidate.evidence_id or next(iter(candidate.referenced_evidence_ids), None)
+        if evidence_id is not None:
+            updates["evidence_id"] = evidence_id
 
         if candidate.intent == "request_evidence" and question_type == "none":
             question_type = "evidence_request"
@@ -879,7 +879,12 @@ class GameEngine:
             if evidence_id is not None and reference_scope == "none":
                 updates["reference_scope"] = "latest_discovered"
 
-        return candidate.model_copy(update=updates) if updates else candidate
+        effective_evidence = updates.get("evidence_id", evidence_id)
+        updates["referenced_evidence_ids"] = (
+            [] if question_type == "responsibility_routing" else
+            list(dict.fromkeys([*candidate.referenced_evidence_ids, *([effective_evidence] if effective_evidence else [])]))
+        )
+        return candidate.model_copy(update=updates)
 
     def _intent_recent_events(self, session: GameSession) -> tuple[str, ...]:
         events = []
@@ -895,20 +900,10 @@ class GameEngine:
         return tuple(events)
 
     def _latest_discovered_evidence_id(self, session: GameSession) -> str | None:
-        for event in reversed(session.events):
-            evidence_id = self._evidence_id_from_event(session, event)
-            if evidence_id in session.discovered_evidence:
-                return evidence_id
-        return next(iter(sorted(session.discovered_evidence)), None)
+        return latest_evidence_id(session)
 
     def _evidence_id_from_event(self, session: GameSession, event: EventLogEntry) -> str | None:
-        if event.event_type != "evidence":
-            return None
-        normalized = event.message.casefold()
-        for evidence_id, evidence in session.evidences.items():
-            if evidence_id.casefold() in normalized or evidence.title.casefold() in normalized:
-                return evidence_id
-        return None
+        return evidence_id_from_event(session, event)
 
     def _validate_intent_hint(self, session: GameSession, candidate: IntentClassification) -> IntentClassification:
         if candidate.intent != "move":
@@ -926,7 +921,9 @@ class GameEngine:
         candidate: IntentClassification,
     ) -> tuple[IntentClassification, bool]:
         target_valid = candidate.target_npc_id is None or candidate.target_npc_id in session.npcs
-        evidence_valid = candidate.evidence_id is None or candidate.evidence_id in session.evidences
+        evidence_valid = (candidate.evidence_id is None or candidate.evidence_id in session.evidences) and all(
+            evidence_id in session.evidences for evidence_id in candidate.referenced_evidence_ids
+        )
         location_valid = candidate.location is None or candidate.location in context.available_locations
         player_has_evidence = (
             candidate.intent != "show_evidence"
@@ -938,7 +935,7 @@ class GameEngine:
         )
         followup_evidence_owned = (
             candidate.question_type != "evidence_followup"
-            or candidate.evidence_id in session.discovered_evidence
+            or (bool(candidate.referenced_evidence_ids) and set(candidate.referenced_evidence_ids).issubset(session.discovered_evidence))
         )
         if target_valid and evidence_valid and location_valid and player_has_evidence and followup_evidence_owned:
             return candidate, False
@@ -1567,7 +1564,7 @@ class GameEngine:
             session,
             "System",
             f"증거를 확보했습니다. {evidence.title}를 공개했습니다.\n{evidence.content}",
-            "evidence",
+            "evidence", evidence_id=evidence.id, evidence_operation="discovered",
         )
         return evidence.content
 
@@ -1592,9 +1589,11 @@ class GameEngine:
         blocked = self._check_npc_response(session, npc)
         if blocked:
             return blocked
-        presentation_count = self._evidence_presentation_count(session, target, evidence.title)
+        presentation_count = self._evidence_presentation_count(session, target, evidence.id)
         policy = self._evidence_presentation_policy(session, npc, evidence, presentation_count)
-        self._append_event(session, "Player", f"{npc.name}에게 {evidence.title}를 제시했습니다.", "evidence", target)
+        observe_evidence(session, npc, evidence.id)
+        self._append_event(session, "Player", f"{npc.name}에게 {evidence.title}를 제시했습니다.", "evidence", target,
+                           evidence_id=evidence.id, recipient_npc_id=target, evidence_operation="presented")
 
         policy_context = (
             "Evidence presentation reaction.\n"
@@ -1630,18 +1629,12 @@ class GameEngine:
             provider_fallback,
         )
         response_message = f"{evidence.content}\n증거를 제시했습니다. {applied_decision.dialogue}"
-        self._append_event(session, npc.name, response_message, "evidence", target)
+        self._append_event(session, npc.name, response_message, "evidence", target,
+                           evidence_id=evidence.id, recipient_npc_id=target, evidence_operation="response")
         return response_message
 
-    def _evidence_presentation_count(self, session: GameSession, target_id: str, evidence_title: str) -> int:
-        return sum(
-            1
-            for event in session.events
-            if event.actor_id == target_id
-            and event.actor == "Player"
-            and event.event_type == "evidence"
-            and evidence_title in event.message
-        )
+    def _evidence_presentation_count(self, session: GameSession, target_id: str, evidence_id: str) -> int:
+        return presentation_count(session, target_id, evidence_id)
 
     def _evidence_presentation_policy(
         self,
@@ -1759,15 +1752,24 @@ class GameEngine:
             if blocked:
                 return blocked
         evidence_id = evidence_id or DEFAULT_EVIDENCE_BY_SOURCE_NPC.get(target_id or "") or "qa_warning_message"
+        evidence = session.evidences[evidence_id]
+        npc = npc or session.npcs.get(evidence.source_npc_id or "")
+        if npc is None or not can_provide_evidence(session, npc, evidence_id):
+            message = "이 NPC가 제공할 수 없는 증거입니다. 해당 자료의 제공자에게 요청하거나 직접 조사하세요."
+            self._append_event(session, "System", message, "guardrail")
+            return message
+        blocked = self._check_npc_response(session, npc)
+        if blocked:
+            return blocked
         self._discover_evidence(session, evidence_id)
         evidence = session.evidences[evidence_id]
-        actor = session.npcs[target_id].name if target_id in session.npcs else "System"
+        actor = npc.name
         self._append_event(
             session,
             actor,
             f"증거를 확보했습니다. {evidence.title}를 공개했습니다.\n{evidence.content}",
             "evidence",
-            target_id,
+            npc.id, evidence_id=evidence.id, recipient_npc_id=npc.id, evidence_operation="discovered",
         )
         return evidence.content
 
@@ -1843,7 +1845,10 @@ class GameEngine:
         self._append_event(session, npc.name, applied_decision.dialogue, "dialogue", npc.id)
         if applied_decision.action_type == "show_evidence" and applied_decision.action_target:
             self._discover_evidence(session, applied_decision.action_target)
-            self._append_event(session, npc.name, "QA Warning evidence를 공개했습니다.", "evidence", npc.id)
+            evidence = session.evidences.get(applied_decision.action_target)
+            if evidence is not None:
+                self._append_event(session, npc.name, f"{evidence.title}를 공개했습니다.", "evidence", npc.id,
+                                   evidence_id=evidence.id, evidence_operation="discovered")
         return applied_decision.dialogue
 
     def _defend_npc(self, session: GameSession, target_id: str | None, player_input: str = "") -> str:
@@ -1883,24 +1888,28 @@ class GameEngine:
         question_type = intent.question_type if intent is not None else "none"
         reference_scope = intent.reference_scope if intent is not None else "none"
         referenced_evidence_id = intent.evidence_id if intent is not None else None
-        referenced_evidence = (
-            session.evidences.get(referenced_evidence_id or "")
-            if question_type == "evidence_followup" and referenced_evidence_id in session.discovered_evidence
-            else None
-        )
+        visible_ids = visible_evidence_ids(session, npc)
+        referenced_evidence = session.evidences.get(referenced_evidence_id or "") if referenced_evidence_id in visible_ids else None
+        fact_ids = available_fact_ids(session, npc)
+        context_npc = npc.model_copy(deep=True, update={
+            "known_fact_ids": fact_ids,
+            "known_facts": [FACT_REGISTRY[fact_id].statement for fact_id in fact_ids if fact_id in FACT_REGISTRY],
+        })
         context = DecisionContext(
             mode=mode,
             player_input=player_input,
             turn=session.turn,
-            npc=npc,
+            npc=context_npc,
             target_npc_id=npc.id,
             available_facts=tuple(
                 f"{fact_id}: {FACT_REGISTRY[fact_id].statement}"
-                for fact_id in npc.known_fact_ids
+                for fact_id in fact_ids
                 if fact_id in FACT_REGISTRY
             ),
             available_evidence_ids=tuple(session.evidences),
-            recent_events=self._decision_recent_events(session, mode),
+            recent_events=self._decision_recent_events(session, mode, npc),
+            visible_evidences=tuple(session.evidences[eid] for eid in sorted(visible_ids)),
+            available_npcs=tuple(f"{item.id}: {item.name} ({item.role})" for item in session.npcs.values()),
             incident_rules=tuple(INCIDENT_RULES),
             question_type=question_type,
             reference_scope=reference_scope,
@@ -1916,11 +1925,7 @@ class GameEngine:
         )
         try:
             decision = self.provider.decide(context)
-            allowed_evidence_ids = (
-                {referenced_evidence.id}
-                if question_type == "evidence_followup" and referenced_evidence is not None
-                else set()
-            )
+            allowed_evidence_ids = visible_ids
             if mode in {"talk", "ask"} and self._contains_evidence_leak(
                 session,
                 decision.dialogue,
@@ -1943,7 +1948,7 @@ class GameEngine:
                     reason="Responsibility answer omitted server-owned responsibility facts.",
                 )
                 return self.fallback_provider.decide(context), True
-            if mode in {"talk", "ask"} and self._contains_unavailable_role_reference(session, decision.dialogue):
+            if any(npc_id not in session.npcs for npc_id in decision.contact_npc_ids):
                 self._record_fallback(
                     session,
                     stage="decision_unavailable_role_guardrail",
@@ -1969,17 +1974,20 @@ class GameEngine:
             )
             return self.fallback_provider.decide(context), True
 
-    def _decision_recent_events(self, session: GameSession, mode: str) -> tuple[str, ...]:
-        if mode not in {"talk", "ask"}:
-            return tuple(f"TURN {event.turn} · {event.actor}: {event.message}" for event in session.events[-8:])
-
-        redacted = []
-        for event in session.events[-8:]:
-            if event.event_type == "evidence":
-                redacted.append(f"TURN {event.turn} · {event.actor}: 증거 관련 이벤트가 기록되었습니다.")
-            else:
-                redacted.append(f"TURN {event.turn} · {event.actor}: {event.message}")
-        return tuple(redacted)
+    def _decision_recent_events(self, session: GameSession, mode: str, npc: NPCState) -> tuple[str, ...]:
+        visible = visible_evidence_ids(session, npc)
+        events = []
+        for event in session.events[-16:]:
+            if event.recipient_npc_id not in {None, npc.id}:
+                continue
+            if event.actor_id not in {None, npc.id}:
+                continue
+            if event.event_type == "fallback":
+                continue
+            if event.event_type == "evidence" and evidence_id_from_event(session, event) not in visible:
+                continue
+            events.append(f"TURN {event.turn} · {event.actor}: {event.message}")
+        return tuple(events[-8:])
 
     def _contains_evidence_leak(
         self,
@@ -1992,8 +2000,6 @@ class GameEngine:
         for evidence_id, evidence in session.evidences.items():
             if evidence_id in allowed_evidence_ids:
                 continue
-            if evidence.title and evidence.title.casefold() in normalized:
-                return True
             if evidence.content and len(evidence.content) >= 24:
                 content_prefix = evidence.content[:24].casefold()
                 if content_prefix in normalized:
@@ -2009,12 +2015,6 @@ class GameEngine:
             if any(re.search(pattern, normalized) for pattern in patterns):
                 return True
         return False
-
-    def _contains_unavailable_role_reference(self, session: GameSession, dialogue: str) -> bool:
-        if "team_lead" in session.npcs or "teamlead" in session.npcs:
-            return False
-        normalized = dialogue.casefold()
-        return any(re.search(pattern, normalized) for pattern in UNAVAILABLE_ROLE_REFERENCE_PATTERNS)
 
     def _apply_decision(
         self,
@@ -2068,8 +2068,8 @@ class GameEngine:
                 npc_id=npc.id,
                 provider=self.provider.name,
                 context_summary=f"{npc.name} evaluated the player's latest action using its private knowledge boundary.",
-                known_fact_ids=list(npc.known_fact_ids),
-                known_facts=list(npc.known_facts),
+                known_fact_ids=available_fact_ids(session, npc),
+                known_facts=[FACT_REGISTRY[fid].statement for fid in available_fact_ids(session, npc) if fid in FACT_REGISTRY],
                 retrieved_rules=list(INCIDENT_RULES[:1]) if npc.id == "qa_01" else [],
                 decision=trace_decision,
                 requested_decision=decision if rejected else None,
@@ -2080,9 +2080,17 @@ class GameEngine:
         return trace_decision
 
     def _validate_decision(self, session: GameSession, npc: NPCState, decision: AgentDecision) -> list[GuardrailCheck]:
-        action_targets = set(session.evidences) | set(session.npcs) | {None}
+        action_targets = set(session.npcs) | {None}
+        if decision.action_type == "show_evidence":
+            action_targets = {eid for eid in session.evidences if can_provide_evidence(session, npc, eid)}
+        elif decision.action_target in session.evidences:
+            action_targets |= visible_evidence_ids(session, npc)
         belief_subjects = set(session.npcs) | {"player", "incident"}
         return [
+            GuardrailCheck(name="evidence_refs_visible", passed=set(decision.evidence_refs).issubset(visible_evidence_ids(session, npc)),
+                           detail="Evidence claims only cite documents visible to this NPC and player."),
+            GuardrailCheck(name="contact_npcs_available", passed=all(target in session.npcs for target in decision.contact_npc_ids),
+                           detail="Suggested contacts are actual available NPCs."),
             GuardrailCheck(
                 name="npc_exists",
                 passed=decision.npc_id == npc.id and npc.id in session.npcs,
@@ -2125,7 +2133,7 @@ class GameEngine:
             ),
             GuardrailCheck(
                 name="knowledge_refs_known_by_npc",
-                passed=all(fact_id in npc.known_fact_ids for fact_id in decision.knowledge_refs),
+                passed=all(fact_id in available_fact_ids(session, npc) for fact_id in decision.knowledge_refs),
                 detail="Knowledge references are inside the NPC knowledge boundary.",
             ),
             GuardrailCheck(
@@ -2223,7 +2231,9 @@ class GameEngine:
             "fallback",
         )
 
-    def _append_event(self, session: GameSession, actor: str, message: str, event_type: str, actor_id: str | None = None) -> None:
+    def _append_event(self, session: GameSession, actor: str, message: str, event_type: str, actor_id: str | None = None,
+                      *, evidence_id: str | None = None, recipient_npc_id: str | None = None,
+                      evidence_operation: str | None = None) -> None:
         session.events.append(
             EventLogEntry(
                 id=len(session.events) + 1,
@@ -2232,6 +2242,7 @@ class GameEngine:
                 actor_id=actor_id,
                 message=message,
                 event_type=event_type,
+                evidence_id=evidence_id, recipient_npc_id=recipient_npc_id, evidence_operation=evidence_operation,
                 created_at=datetime.now(UTC),
             )
         )

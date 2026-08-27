@@ -1,6 +1,15 @@
 from app.game.seed import FACT_DEFINITIONS, FACT_REGISTRY, build_initial_evidence, build_initial_npcs
 
 
+def test_disclosed_document_facts_are_valid_and_do_not_include_private_inferences():
+    from app.game.seed import EVIDENCE_DISCLOSED_FACT_IDS
+
+    for evidence_id, fact_ids in EVIDENCE_DISCLOSED_FACT_IDS.items():
+        assert evidence_id in build_initial_evidence()
+        assert all(evidence_id in FACT_REGISTRY[fid].source_evidence_ids and FACT_REGISTRY[fid].revealable for fid in fact_ids)
+    assert "team_lead_did_not_confirm_warning" not in EVIDENCE_DISCLOSED_FACT_IDS["qa_warning_message"]
+
+
 def test_fact_registry_has_unique_ids_and_valid_evidence_sources() -> None:
     evidence_ids = set(build_initial_evidence())
 

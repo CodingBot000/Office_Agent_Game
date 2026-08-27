@@ -15,6 +15,8 @@ from app.models import (
 
 
 FACT_DEFINITIONS = [
+    FactDefinition(id="api_response_contract_changed", statement="response.data.items changed to response.payload.items without the frontend consumer update in the same release.", category="evidence", source_evidence_ids=["api_schema_diff"]),
+    FactDefinition(id="release_was_accelerated", statement="The release was moved one day earlier; QA warned at 16:40 and deployment began at 17:00.", category="evidence", source_evidence_ids=["release_timeline"]),
     FactDefinition(id="pm_moved_release_date", statement="PM moved the release date one day earlier.", category="canonical", source_evidence_ids=["release_timeline"]),
     FactDefinition(id="team_lead_required_release_today", statement="The team lead required deployment today.", category="canonical", source_evidence_ids=["release_timeline"]),
     FactDefinition(id="business_requested_shorter_schedule", statement="Business stakeholders asked for a shorter schedule.", category="canonical", source_evidence_ids=["release_timeline"]),
@@ -37,6 +39,13 @@ FACT_DEFINITIONS = [
 ]
 
 FACT_REGISTRY = {fact.id: fact for fact in FACT_DEFINITIONS}
+
+# Only facts directly established by the document, not every fact that cites it.
+EVIDENCE_DISCLOSED_FACT_IDS = {
+    "qa_warning_message": ("qa_found_critical_issue", "qa_sent_warning", "warning_recommended_deploy_block"),
+    "api_schema_diff": ("api_response_contract_changed",),
+    "release_timeline": ("release_was_accelerated",),
+}
 CANONICAL_TRUTH = [fact.statement for fact in FACT_DEFINITIONS if fact.category == "canonical"]
 
 RESPONSIBILITY_FACT_IDS = [
