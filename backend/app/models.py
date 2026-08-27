@@ -346,6 +346,7 @@ class AgentDecision(BaseModel):
     action_type: str
     action_target: str | None = None
     dialogue: str
+    response_kind: Literal["reply", "refusal", "recovery_pending"] = "reply"
 
 
 class IntentClassification(BaseModel):

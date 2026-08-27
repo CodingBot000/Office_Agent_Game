@@ -378,11 +378,11 @@ class GameEngine:
         elif action.family == "pick_up_object":
             world_object = world_object.model_copy(update={"holder_id": "player"})
             session.world_objects[world_object.id] = world_object
-            self._apply_owner_policy(session, world_object, "property_interference", 3, ["property_violation"])
+            self._apply_owner_policy(session, world_object, "property_interference", 3, ["property_violation"], player_input=action.label)
             message = f"{world_object.name}을(를) 손에 들었습니다."
             self._append_event(session, "Player", message, "game_action")
         elif action.family == "break_held_object":
-            self._apply_owner_policy(session, world_object, "property_aggression", 4, ["property_violation", "property_damage"])
+            self._apply_owner_policy(session, world_object, "property_aggression", 4, ["property_violation", "property_damage"], player_input=action.label)
             world_object = session.world_objects[world_object.id].model_copy(
                 update={"holder_id": None, "condition": "destroyed"}
             )
@@ -403,7 +403,7 @@ class GameEngine:
             if target is None or target.physical_state == "comatose":
                 return self._record_blocked_game_action(session, action, "Target NPC cannot be hit in the current state.")
 
-            self._apply_throw_policy(session, world_object, target_id)
+            self._apply_throw_policy(session, world_object, target_id, action.label)
             world_object = world_object.model_copy(
                 update={
                     "holder_id": None,
@@ -456,6 +456,7 @@ class GameEngine:
         reason_codes: list[str],
         excluded_witness_ids: set[str] | None = None,
         witness_location: str | None = None,
+        player_input: str = "",
     ) -> None:
         if world_object.owner_id is None or world_object.owner_id not in session.npcs:
             return
@@ -493,15 +494,9 @@ class GameEngine:
         )
         self._apply_social_outcome(session, classification, outcome)
         owner = session.npcs[world_object.owner_id]
-        self._append_event(
-            session,
-            owner.name,
-            self._social_reaction_message(classification, owner),
-            "dialogue",
-            owner.id,
-        )
+        self._generate_social_reaction(session, classification, owner, outcome, player_input or f"{family}: {world_object.name}")
 
-    def _apply_throw_policy(self, session: GameSession, world_object: WorldObjectState, target_id: str | None) -> None:
+    def _apply_throw_policy(self, session: GameSession, world_object: WorldObjectState, target_id: str | None, player_input: str) -> None:
         if target_id is None or target_id not in session.npcs:
             return
 
@@ -530,13 +525,9 @@ class GameEngine:
         self._apply_social_outcome(session, classification, outcome)
 
         target = session.npcs[target_id]
-        self._append_event(
-            session,
-            target.name,
-            self._social_reaction_message(classification, target),
-            "dialogue",
-            target.id,
-        )
+        if effect != "physical_assault":
+            self._generate_social_reaction(session, classification, target, outcome, player_input)
+
 
         if world_object.owner_id and world_object.owner_id in session.npcs and world_object.owner_id != target_id:
             self._apply_owner_policy(
@@ -547,6 +538,7 @@ class GameEngine:
                 ["property_violation", "property_damage"],
                 excluded_witness_ids={target_id},
                 witness_location=impact_location,
+                player_input=player_input,
             )
 
     def _record_comatose_awareness(
@@ -1456,13 +1448,7 @@ class GameEngine:
             for target_id in classification.direct_target_ids:
                 if target_id in session.npcs:
                     npc = session.npcs[target_id]
-                    self._append_event(
-                        session,
-                        npc.name,
-                        self._social_reaction_message(classification, npc),
-                        "dialogue",
-                        npc.id,
-                    )
+                    self._generate_social_reaction(session, classification, npc, outcome, text)
         logger.info(
             "relationship_policy_applied turn=%s family=%s severity=%s targets=%s fallback=%s",
             session.turn,
@@ -1473,26 +1459,20 @@ class GameEngine:
         )
         return message
 
-    def _social_reaction_message(self, classification: SocialImpactClassification, npc: NPCState) -> str:
-        reactions = {
-            "verbal_pressure": "그런 식으로 윽박지르면 정상적으로 협력하기 어렵습니다. 차분하게 말씀해 주세요.",
-            "insult": "업무 문제와 인신공격은 구분해 주세요. 그런 표현은 받아들일 수 없습니다.",
-            "public_humiliation": "공개적으로 망신을 주는 방식의 대화에는 응하지 않겠습니다.",
-            "threat": "위협으로 느껴집니다. 이 상황은 공식 절차를 통해 보고하겠습니다.",
-            "property_interference": "제 물건을 허락 없이 가져가지 마세요. 즉시 돌려주세요.",
-            "property_aggression": "제 물건을 빼앗아 던지는 행동은 용납할 수 없습니다. 이 상황을 HR에 보고하겠습니다.",
-            "physical_intimidation": "물리적인 위협을 느꼈습니다. 지금은 대화를 계속할 수 없습니다.",
-            "physical_assault": "대화를 즉시 중단하겠습니다. Security의 도움을 요청합니다.",
-            "sabotage": "업무를 방해하는 행동을 중단하고 손상된 내용을 복구해 주세요.",
-            "deception": "사실을 숨기거나 왜곡한 상태에서는 신뢰하기 어렵습니다.",
-            "support": "상황을 공정하게 봐주셔서 감사합니다. 필요한 내용을 협조하겠습니다.",
-            "apology": "사과는 들었습니다. 하지만 관계가 회복되려면 실제 피해 복구가 필요합니다.",
-            "repair_action": "피해 복구를 확인했습니다. 다음 단계로 공식적인 중재가 필요합니다.",
-            "mediation": "중재 내용을 수용하겠습니다. 앞으로는 정해진 절차로 대화하겠습니다.",
-            "evidence_based_confrontation": "제시한 근거를 기준으로 질문에 답하겠습니다.",
-            "constructive_dialogue": "차분하게 이야기해 주시면 제가 아는 범위에서 협조하겠습니다.",
-        }
-        return reactions.get(classification.action_family, f"{npc.name}은 이 행동에 대한 입장을 정리하고 있습니다.")
+    def _generate_social_reaction(
+        self, session: GameSession, classification: SocialImpactClassification, npc: NPCState,
+        outcome: SocialPolicyOutcome, player_input: str,
+    ) -> None:
+        if npc.physical_state == "comatose":
+            return
+        decision, fallback = self._request_decision(
+            session, npc, "social_reaction", player_input,
+            social_classification=classification, social_outcome=outcome,
+        )
+        # Narration cannot reapply policy effects or replace the policy-owned emotion.
+        decision = decision.model_copy(update={"emotion": npc.dynamic_state.emotion})
+        applied = self._apply_decision(session, npc, decision, f"Reaction to {classification.action_family}", fallback)
+        self._append_event(session, npc.name, applied.dialogue, "dialogue", npc.id)
 
     def _social_action_message(
         self,
@@ -1884,6 +1864,8 @@ class GameEngine:
         mode: str,
         player_input: str,
         intent: IntentClassification | None = None,
+        *, social_classification: SocialImpactClassification | None = None,
+        social_outcome: SocialPolicyOutcome | None = None,
     ) -> tuple[AgentDecision, bool]:
         question_type = intent.question_type if intent is not None else "none"
         reference_scope = intent.reference_scope if intent is not None else "none"
@@ -1895,8 +1877,13 @@ class GameEngine:
             "known_fact_ids": fact_ids,
             "known_facts": [FACT_REGISTRY[fact_id].statement for fact_id in fact_ids if fact_id in FACT_REGISTRY],
         })
+        edge = session.relationships[relationship_key(npc.id, "player")]
+        required_kind = "refusal" if npc.id in session.dialogue_refused_npc_ids else "recovery_pending" if edge.trust_ceiling is not None else "reply"
         context = DecisionContext(
             mode=mode,
+            social_classification=social_classification,
+            social_outcome=social_outcome,
+            required_response_kind=required_kind,
             player_input=player_input,
             turn=session.turn,
             npc=context_npc,
@@ -1925,8 +1912,17 @@ class GameEngine:
         )
         try:
             decision = self.provider.decide(context)
+            if mode == "social_reaction" and (
+                decision.action_type != "dialogue" or decision.action_target is not None
+                or any((decision.stress_delta, decision.trust_delta, decision.cooperation_delta))
+                or decision.belief_updates or decision.relationship_updates or decision.memory_candidate
+                or decision.response_kind != required_kind
+            ):
+                self._record_fallback(session, "decision_guardrail", self.provider.name,
+                                      "Social narration attempted state changes or contradicted the required response kind.")
+                return self.fallback_provider.decide(context), True
             allowed_evidence_ids = visible_ids
-            if mode in {"talk", "ask"} and self._contains_evidence_leak(
+            if mode in {"talk", "ask", "social_reaction"} and self._contains_evidence_leak(
                 session,
                 decision.dialogue,
                 allowed_evidence_ids,

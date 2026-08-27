@@ -61,6 +61,9 @@ def build_decision_prompt(context: DecisionContext) -> str:
             "responsibility_map": context.responsibility_map,
             "visible_evidences": [evidence.model_dump(mode="json") for evidence in context.visible_evidences],
             "available_npcs": context.available_npcs,
+            "social_classification": context.social_classification.model_dump(mode="json") if context.social_classification else None,
+            "social_outcome": context.social_outcome.model_dump(mode="json") if context.social_outcome else None,
+            "required_response_kind": context.required_response_kind,
             "recent_events": context.recent_events,
             "incident_rules": context.incident_rules,
         },
@@ -101,6 +104,12 @@ Rules:
   Do not invent a contact. Background or negated mentions of roles need no contact entry.
   Route questions using available_npcs and responsibility_map, not assumed roles.
 - Use the NPC's personality, dynamic state, beliefs, relationships, and memories.
+- In social_reaction mode, social_outcome has ALREADY been applied by the server. Express the NPC's
+  reaction to the actual player_input using their personality, memories and current state.
+  Return only a dialogue action with null action_target, zero deltas, empty belief/relationship updates,
+  and null memory_candidate. Never claim another state change or invent consequences.
+  Set response_kind to required_response_kind: refusal means normal conversation remains refused;
+  recovery_pending means restrictions remain and you must not claim complete recovery.
 - Keep dialogue short, natural, and grounded only in the supplied context.
 
 Current decision context:

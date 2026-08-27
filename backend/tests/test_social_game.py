@@ -3,6 +3,89 @@ import logging
 from app.game.engine import GameEngine
 from app.models import GameActionRequest, IntentClassification, SocialImpactClassification
 from app.providers.base import ProviderError
+from app.models import AgentDecision
+
+
+def test_social_reaction_uses_provider_context_without_applying_effects_twice():
+    class ReactionProvider:
+        name = "openai"
+        model = "test"
+
+        def __init__(self):
+            self.contexts = []
+
+        def decide(self, context):
+            self.contexts.append(context)
+            assert context.mode == "social_reaction"
+            assert context.social_outcome.relationship_effects
+            return AgentDecision(npc_id=context.npc.id, emotion="invented-emotion", stress_delta=0,
+                trust_delta=0, cooperation_delta=0, action_type="dialogue", grounding_type="acknowledgement",
+                dialogue=f"{context.npc.name}: 구체적인 사과를 들었습니다.", response_kind=context.required_response_kind)
+
+    provider = ReactionProvider()
+    engine = GameEngine(provider=provider)
+    sid = engine.create_session().session_id
+    text = "QA에게 급하게 몰아붙였던 점을 사과합니다"
+    response = engine.submit_action(sid, text, target_hint="qa_01")
+    assert len(provider.contexts) == 1
+    assert provider.contexts[0].player_input == text
+    assert response.snapshot.events[-1].message == "QA Engineer: 구체적인 사과를 들었습니다."
+    npc = next(n for n in response.snapshot.npcs if n.id == "qa_01")
+    assert npc.dynamic_state.emotion != "invented-emotion"
+    assert npc.dynamic_state.trust_toward_player == 23
+
+
+def test_reaction_failure_keeps_single_policy_effect_and_visible_fallback():
+    class FailedReaction:
+        name = "cli"
+        model = "test"
+
+        def decide(self, context):
+            raise ProviderError("reaction unavailable")
+
+    engine = GameEngine(provider=FailedReaction())
+    response = engine.submit_action(engine.create_session().session_id, "QA에게 사과합니다", target_hint="qa_01")
+    npc = next(n for n in response.snapshot.npcs if n.id == "qa_01")
+    assert npc.dynamic_state.trust_toward_player == 23
+    assert response.snapshot.agent_traces[-1].fallback_used
+    assert response.snapshot.fallback_notices[-1].stage == "decision_provider"
+
+
+def test_reaction_cannot_reapply_deltas_or_release_recovery_restrictions():
+    class UnsafeReaction:
+        name = "openai"
+        model = "test"
+
+        def decide(self, context):
+            return AgentDecision(npc_id=context.npc.id, emotion="happy", stress_delta=-100,
+                trust_delta=100, cooperation_delta=100, action_type="dialogue", grounding_type="acknowledgement",
+                dialogue="모두 회복됐습니다.", response_kind="reply")
+
+    engine = GameEngine(provider=UnsafeReaction())
+    response = engine.submit_action(engine.create_session().session_id, "QA에게 해고시켜 버린다고 위협한다", target_hint="qa_01")
+    npc = next(n for n in response.snapshot.npcs if n.id == "qa_01")
+    assert npc.dynamic_state.trust_toward_player == -20
+    assert response.snapshot.agent_traces[-1].fallback_used
+    assert response.snapshot.agent_traces[-1].decision.response_kind == "recovery_pending"
+    assert not any(event.message == "모두 회복됐습니다." for event in response.snapshot.events)
+
+
+def test_button_reaction_uses_executed_action_and_skips_comatose_speech():
+    from app.providers.deterministic import DeterministicDecisionProvider
+
+    class Capture(DeterministicDecisionProvider):
+        def __init__(self): self.inputs = []
+        def decide(self, context):
+            self.inputs.append((context.mode, context.player_input, context.npc.id))
+            return super().decide(context)
+
+    provider = Capture()
+    engine = GameEngine(provider=provider)
+    sid = engine.create_session().session_id
+    response = engine.submit_game_action(sid, GameActionRequest(action_id="throw_americano_coupon_at_qa_01"))
+    assert provider.inputs == [("social_reaction", "Throw 아메리카노 쿠폰 at QA Engineer", "qa_01")]
+    engine.submit_game_action(sid, GameActionRequest(action_id="throw_representative_person_at_qa_01"))
+    assert len(provider.inputs) == 1
 
 
 def test_player_owned_object_does_not_create_player_self_relationship():

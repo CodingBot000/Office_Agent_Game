@@ -244,6 +244,32 @@ class DeterministicDecisionProvider:
 
     def decide(self, context: DecisionContext) -> AgentDecision:
         npc = context.npc
+        if context.mode == "social_reaction":
+            reactions = {
+                "verbal_pressure": "그런 식으로 윽박지르면 정상적으로 협력하기 어렵습니다. 차분하게 말씀해 주세요.",
+                "insult": "업무 문제와 인신공격은 구분해 주세요. 그런 표현은 받아들일 수 없습니다.",
+                "public_humiliation": "공개적으로 망신을 주는 방식의 대화에는 응하지 않겠습니다.",
+                "threat": "위협으로 느껴집니다. 이 상황은 공식 절차를 통해 보고하겠습니다.",
+                "property_interference": "제 물건을 허락 없이 가져가지 마세요. 즉시 돌려주세요.",
+                "property_aggression": "제 물건을 빼앗아 던지는 행동은 용납할 수 없습니다. 이 상황을 HR에 보고하겠습니다.",
+                "physical_intimidation": "물리적인 위협을 느꼈습니다. 지금은 대화를 계속할 수 없습니다.",
+                "physical_assault": "대화를 즉시 중단하겠습니다. Security의 도움을 요청합니다.",
+                "sabotage": "업무를 방해하는 행동을 중단하고 손상된 내용을 복구해 주세요.",
+                "deception": "사실을 숨기거나 왜곡한 상태에서는 신뢰하기 어렵습니다.",
+                "support": "상황을 공정하게 봐주셔서 감사합니다. 필요한 내용을 협조하겠습니다.",
+                "apology": "사과는 들었습니다. 하지만 관계가 회복되려면 실제 피해 복구가 필요합니다.",
+                "repair_action": "피해 복구를 확인했습니다. 다음 단계로 공식적인 중재가 필요합니다.",
+                "mediation": "중재 내용을 수용하겠습니다. 앞으로는 정해진 절차로 대화하겠습니다.",
+                "evidence_based_confrontation": "제시한 근거를 기준으로 질문에 답하겠습니다.",
+                "constructive_dialogue": "차분하게 이야기해 주시면 제가 아는 범위에서 협조하겠습니다.",
+            }
+            family = context.social_classification.action_family if context.social_classification else "constructive_dialogue"
+            return AgentDecision(
+                npc_id=npc.id, emotion=npc.dynamic_state.emotion, stress_delta=0, trust_delta=0,
+                cooperation_delta=0, action_type="dialogue", grounding_type="acknowledgement",
+                dialogue=reactions.get(family, "말씀을 확인했습니다."),
+                response_kind=context.required_response_kind,
+            )
         if context.question_type == "evidence_followup":
             explanation_by_id = {
                 "qa_warning_message": (
