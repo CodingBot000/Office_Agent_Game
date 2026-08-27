@@ -2,6 +2,7 @@ import type { AvailableGameAction } from "./types";
 
 const emotionLabels: Record<string, string> = {
   neutral: "중립",
+  calm: "차분",
   tense: "긴장",
   worried: "걱정",
   guarded: "경계",
