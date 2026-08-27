@@ -20,4 +20,3 @@ def append_event(session: GameSession, actor: str, message: str, event_type: str
             created_at=datetime.now(UTC),
         )
     )
-

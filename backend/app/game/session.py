@@ -37,4 +37,3 @@ class GameSession:
     result: GameResult | None = None
     report: IncidentReportRequest | None = None
     report_extraction: ReportExtraction | None = None
-

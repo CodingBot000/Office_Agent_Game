@@ -179,4 +179,3 @@ def validate_decision(session: GameSession, npc: NPCState, decision: AgentDecisi
             detail="Decision deltas are within the allowed range.",
         ),
     ]
-
