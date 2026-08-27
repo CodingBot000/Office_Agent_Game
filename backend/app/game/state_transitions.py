@@ -7,7 +7,7 @@ from app.game.seed import relationship_key
 from app.models import NPCState, Relationship, RelationshipState
 
 if TYPE_CHECKING:
-    from app.game.engine import GameSession
+    from app.game.session import GameSession
 
 
 def npc_response_block(npc: NPCState, refused_ids: set[str]) -> str | None:

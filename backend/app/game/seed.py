@@ -99,6 +99,16 @@ NPC_HOME_LOCATIONS = {
     "pm_01": "pm_desk",
 }
 
+LOCATION_LABELS = {
+    "meeting_room": "회의실", "dev_area": "개발 구역", "qa_desk": "QA Desk", "pm_desk": "PM Desk",
+}
+NPC_ALIASES = {
+    "backend_01": ("backend", "백엔드", "백엔드 개발자", "서버"),
+    "frontend_01": ("frontend", "프론트", "프론트엔드", "클라이언트"),
+    "pm_01": ("pm", "기획", "planner", "플래너"),
+    "qa_01": ("qa", "품질", "테스트", "qa 엔지니어"),
+}
+
 WORLD_OBJECT_DEFINITIONS = [
     WorldObjectDefinition(id="backend_keyboard", name="Backend keyboard", owner_id="backend_01", location="dev_area"),
     WorldObjectDefinition(id="frontend_keyboard", name="Frontend keyboard", owner_id="frontend_01", location="dev_area"),
@@ -374,3 +384,24 @@ def clone_relationships() -> dict[str, RelationshipState]:
 
 def clone_world_objects() -> dict[str, WorldObjectState]:
     return deepcopy(build_initial_world_objects())
+
+
+# Evidence reactions may be phrased by an LLM, but they must not rewrite the
+# incident's canonical timeline. These patterns cover explicit denials of the
+# facts that are central to the Backend/QA warning scenario. Regretful wording
+# such as "배포하지 않았어야 했습니다" is intentionally allowed.
+KNOWN_FACT_CONTRADICTION_PATTERNS = {
+    "backend_executed_deployment": (
+        r"배포(?:를|는|가)?\s*(?:진행\s*)?하지\s*않았(?!어야)",
+        r"배포(?:를|는|가)?\s*안\s*(?:했|했습니다|했었)",
+        r"릴리스(?:를|는|가)?\s*(?:진행\s*)?하지\s*않았(?!어야)",
+        r"(?:did not|didn't)\s+(?:deploy|release)",
+        r"(?:was not|wasn't)\s+(?:deployed|released)",
+        r"(?:not|never)\s+(?:deployed|released)",
+    ),
+    "backend_changed_api_schema": (
+        r"(?:api\s*)?(?:응답\s*)?스키마(?:를|는|가|도)?\s*(?:변경|변경하|바꾸|바꿔)지?\s*않았(?!어야)",
+        r"(?:did not|didn't)\s+change\s+(?:the\s+)?api\s+(?:response\s+)?schema",
+        r"(?:api\s+)?schema\s+was not\s+changed",
+    ),
+}

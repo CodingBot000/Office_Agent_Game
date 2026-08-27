@@ -1,7 +1,7 @@
 import re
 
 from app.models import AgentDecision, IntentClassification, Memory, SocialImpactClassification
-from app.game.seed import RESPONSIBILITY_FACT_IDS
+from app.game.seed import RESPONSIBILITY_FACT_IDS, NPC_ALIASES
 from app.providers.base import (
     AgentProvider,
     DecisionContext,
@@ -213,13 +213,7 @@ class DeterministicIntentProvider:
         return None
 
     def _resolve_target(self, text: str) -> str | None:
-        aliases = {
-            "backend_01": ("backend", "백엔드", "백엔드 개발자", "서버"),
-            "frontend_01": ("frontend", "프론트", "프론트엔드", "클라이언트"),
-            "pm_01": ("pm", "기획", "planner", "플래너"),
-            "qa_01": ("qa", "품질", "테스트", "qa 엔지니어"),
-        }
-        for npc_id, candidates in aliases.items():
+        for npc_id, candidates in NPC_ALIASES.items():
             if any(candidate in text for candidate in candidates):
                 return npc_id
         return None
@@ -525,13 +519,7 @@ class DeterministicSocialImpactProvider:
         )
 
     def _resolve_target(self, text: str, context: SocialImpactContext) -> str | None:
-        aliases = {
-            "backend_01": ("backend", "백엔드", "서버"),
-            "frontend_01": ("frontend", "프론트", "클라이언트"),
-            "qa_01": ("qa", "품질", "테스트"),
-            "pm_01": ("pm", "기획", "플래너"),
-        }
-        for npc_id, candidates in aliases.items():
+        for npc_id, candidates in NPC_ALIASES.items():
             if npc_id in context.available_npc_ids and any(candidate in text for candidate in candidates):
                 return npc_id
         if context.target_hint in context.available_npc_ids:

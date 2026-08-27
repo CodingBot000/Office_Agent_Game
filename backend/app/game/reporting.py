@@ -11,7 +11,7 @@ from app.models import GameResult, IncidentReportRequest, ReportExtraction
 from app.providers.base import ProviderError, ReportContext, ReportProvider
 
 if TYPE_CHECKING:
-    from app.game.engine import GameSession
+    from app.game.session import GameSession
 
 logger = logging.getLogger(__name__)
 

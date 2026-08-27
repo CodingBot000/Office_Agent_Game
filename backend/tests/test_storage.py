@@ -261,3 +261,19 @@ def test_report_and_extraction_survive_sqlite_restart(tmp_path):
     assert restored.report == report
     assert restored.report_extraction.claims
     assert restored.result == result.result
+
+
+def test_v8_migration_does_not_infer_observations_and_repairs_old_trust_limits():
+    repository = MemorySessionRepository()
+    engine = GameEngine(session_repository=repository)
+    sid = engine.create_session().session_id
+    payload = repository.load(sid)
+    payload["schema_version"] = 8
+    payload["npcs"]["qa_01"].pop("observed_evidence_ids", None)
+    payload["relationships"]["qa_01->player"].update(trust=60, trust_ceiling=20, fear_floor=20, fear=0)
+    repository.save(sid, payload, expected_revision=payload["_revision"])
+    restored = engine.get_session(sid)
+    assert restored.npcs["qa_01"].observed_evidence_ids == []
+    assert restored.relationships["qa_01->player"].trust == restored.npcs["qa_01"].dynamic_state.trust_toward_player == 20
+    assert restored.relationships["qa_01->player"].fear == 20
+    assert engine.get_session(sid).revision == restored.revision

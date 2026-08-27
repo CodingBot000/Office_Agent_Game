@@ -1,91 +1,29 @@
 from __future__ import annotations
 
 import logging
-import re
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Callable, get_args
 from uuid import uuid4
 
+from app.game.session import GameSession
+from app.game.session_codec import CURRENT_SESSION_SCHEMA_VERSION, serialize_session, deserialize_session, migrate_session_payload
+from app.game.events import append_event
+from app.game.conversation import build_decision_context, validate_decision, contains_evidence_leak, contains_known_fact_contradiction
+from app.game.social_state import (recovery_transition_valid, npc_ids_at_location, derive_witnesses,
+                                   is_repeated_social_action, validate_social_outcome, apply_social_outcome)
 from app.config import Settings, get_settings
-from app.game.seed import (
-    CANONICAL_TRUTH,
-    DEFAULT_EVIDENCE_BY_SOURCE_NPC,
-    FACT_REGISTRY,
-    INCIDENT_RULES,
-    LEGACY_FACT_TEXT_TO_ID,
-    RESPONSIBILITY_FACT_IDS,
-    build_initial_world_objects,
-    build_relationship_graph,
-    clone_evidence,
-    clone_npcs,
-    clone_relationships,
-    clone_world_objects,
-    relationship_key,
-    STARTER_ITEM_IDS,
-)
+from app.game.seed import DEFAULT_EVIDENCE_BY_SOURCE_NPC, FACT_REGISTRY, INCIDENT_RULES, RESPONSIBILITY_FACT_IDS, relationship_key
 from app.game.relationship_policy import RelationshipPolicyEngine
 from app.game.reporting import evaluate_report
 from app.providers.base import ReportProvider
 from app.providers.factory import create_report_provider
 from app.game.state_transitions import change_relationship, npc_response_block
-from app.game.evidence_policy import (
-    available_fact_ids, can_provide_evidence, observe_evidence, visible_evidence_ids,
-    evidence_id_from_event, latest_evidence_id, presentation_count,
-)
+from app.game.evidence_policy import available_fact_ids, can_provide_evidence, observe_evidence, evidence_id_from_event, latest_evidence_id, presentation_count, evidence_presentation_policy
 from app.game.action_registry import build_available_game_actions, build_player_inventory
-from app.game.seed import NPC_HOME_LOCATIONS
-from app.game.social_rules import (
-    BASE_RELATIONSHIP_IMPACTS,
-    HARMFUL_ACTION_FAMILIES,
-    GAME_ACTION_FAMILIES,
-    RECOVERY_ACTION_FAMILIES,
-    SEVERITY_RANGES,
-)
-from app.models import (
-    ActionResponse,
-    ActionType,
-    AvailableGameAction,
-    AgentDecision,
-    AgentTrace,
-    Belief,
-    DynamicState,
-    Evidence,
-    EventLogEntry,
-    FallbackNotice,
-    GameResult,
-    GameSnapshot,
-    GameActionGuardrail,
-    GameActionRequest,
-    GameActionResponse,
-    GameActionTrace,
-    GuardrailCheck,
-    IncidentReportRequest,
-    IntentClassification,
-    Memory,
-    NPCState,
-    PlayerInventory,
-    Relationship,
-    RelationshipState,
-    RelationshipUpdate,
-    ReportExtraction,
-    SocialEventTrace,
-    SocialImpactClassification,
-    SocialPolicyOutcome,
-    WorldObjectState,
-)
-from app.providers import (
-    AgentProvider,
-    DecisionContext,
-    IntentContext,
-    IntentProvider,
-    ProviderError,
-    SocialImpactContext,
-    SocialImpactProvider,
-    create_intent_provider,
-    create_provider,
-    create_social_impact_provider,
-)
+from app.game.seed import NPC_HOME_LOCATIONS, LOCATION_LABELS
+from app.game.social_rules import BASE_RELATIONSHIP_IMPACTS, GAME_ACTION_FAMILIES, SEVERITY_RANGES
+from app.models import ActionResponse, ActionType, AvailableGameAction, AgentDecision, AgentTrace, Belief, DynamicState, EventLogEntry, FallbackNotice, GameSnapshot, GameActionGuardrail, GameActionRequest, GameActionResponse, GameActionTrace, GuardrailCheck, IncidentReportRequest, IntentClassification, Memory, NPCState, RelationshipUpdate, SocialEventTrace, SocialImpactClassification, SocialPolicyOutcome, WorldObjectState
+from app.providers import AgentProvider, IntentContext, IntentProvider, ProviderError, SocialImpactContext, SocialImpactProvider, create_intent_provider, create_provider, create_social_impact_provider
 from app.providers.deterministic import (
     DeterministicDecisionProvider,
     DeterministicIntentProvider,
@@ -95,66 +33,10 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 10
 GAME_ACTION_ALERT = "Use the provided action buttons to perform game actions."
 
 
 AVAILABLE_ACTIONS = list(get_args(ActionType))
-
-ALLOWED_AGENT_ACTION_TYPES = {"dialogue", "show_evidence", "belief_update"}
-
-# Evidence reactions may be phrased by an LLM, but they must not rewrite the
-# incident's canonical timeline. These patterns cover explicit denials of the
-# facts that are central to the Backend/QA warning scenario. Regretful wording
-# such as "배포하지 않았어야 했습니다" is intentionally allowed.
-KNOWN_FACT_CONTRADICTION_PATTERNS = {
-    "backend_executed_deployment": (
-        r"배포(?:를|는|가)?\s*(?:진행\s*)?하지\s*않았(?!어야)",
-        r"배포(?:를|는|가)?\s*안\s*(?:했|했습니다|했었)",
-        r"릴리스(?:를|는|가)?\s*(?:진행\s*)?하지\s*않았(?!어야)",
-        r"(?:did not|didn't)\s+(?:deploy|release)",
-        r"(?:was not|wasn't)\s+(?:deployed|released)",
-        r"(?:not|never)\s+(?:deployed|released)",
-    ),
-    "backend_changed_api_schema": (
-        r"(?:api\s*)?(?:응답\s*)?스키마(?:를|는|가|도)?\s*(?:변경|변경하|바꾸|바꿔)지?\s*않았(?!어야)",
-        r"(?:did not|didn't)\s+change\s+(?:the\s+)?api\s+(?:response\s+)?schema",
-        r"(?:api\s+)?schema\s+was not\s+changed",
-    ),
-}
-
-@dataclass
-class GameSession:
-    session_id: str
-    revision: int | None = None
-    turn: int = 0
-    current_location: str = "meeting_room"
-    incident_status: str = "ACTIVE"
-    objective: list[str] = field(
-        default_factory=lambda: [
-            "장애의 직접 원인과 기여 요인을 파악하세요.",
-            "주요 증거를 확보하세요.",
-            "팀의 신뢰를 심각하게 훼손하지 마세요.",
-            "최종 Incident Report를 제출하세요.",
-        ]
-    )
-    npcs: dict[str, NPCState] = field(default_factory=clone_npcs)
-    relationships: dict[str, RelationshipState] = field(default_factory=clone_relationships)
-    world_objects: dict[str, WorldObjectState] = field(default_factory=clone_world_objects)
-    social_events: list[SocialEventTrace] = field(default_factory=list)
-    game_action_traces: list[GameActionTrace] = field(default_factory=list)
-    dialogue_refused_npc_ids: set[str] = field(default_factory=set)
-    blocked_action_alert: str | None = None
-    evidences: dict[str, Evidence] = field(default_factory=clone_evidence)
-    events: list[EventLogEntry] = field(default_factory=list)
-    agent_traces: list[AgentTrace] = field(default_factory=list)
-    fallback_notices: list[FallbackNotice] = field(default_factory=list)
-    discovered_evidence: set[str] = field(default_factory=set)
-    canonical_truth: list[str] = field(default_factory=lambda: list(CANONICAL_TRUTH))
-    completed: bool = False
-    result: GameResult | None = None
-    report: IncidentReportRequest | None = None
-    report_extraction: ReportExtraction | None = None
 
 
 class SessionNotFoundError(KeyError):
@@ -198,8 +80,8 @@ class GameEngine:
         payload = self.session_repository.load(session_id)
         if payload is None:
             raise SessionNotFoundError(session_id)
-        migrated_payload, migrated = self._migrate_session_payload(payload)
-        session = self._deserialize_session(migrated_payload)
+        migrated_payload, migrated = migrate_session_payload(payload)
+        session = deserialize_session(migrated_payload)
         if migrated:
             self._save_session(session)
         return session
@@ -209,7 +91,7 @@ class GameEngine:
         replacement = GameSession(session_id=str(uuid4()))
         self._append_event(replacement, "System", "서비스 장애 사건이 시작되었습니다. 현재 상태: ACTIVE.", "system")
         replacement.revision = self.session_repository.replace(
-            session_id, previous.revision, replacement.session_id, self._serialize_session(replacement)
+            session_id, previous.revision, replacement.session_id, serialize_session(replacement)
         )
         return self.snapshot(replacement)
 
@@ -482,7 +364,7 @@ class GameEngine:
         excluded_witness_ids = excluded_witness_ids or set()
         witnesses = [
             npc_id
-            for npc_id in self._derive_witnesses(
+            for npc_id in derive_witnesses(
                 session,
                 classification,
                 [world_object.owner_id],
@@ -500,7 +382,7 @@ class GameEngine:
             witness_ids=witnesses,
             turn=session.turn,
         )
-        self._apply_social_outcome(session, classification, outcome)
+        apply_social_outcome(session, classification, outcome)
         owner = session.npcs[world_object.owner_id]
         self._generate_social_reaction(session, classification, owner, outcome, player_input or f"{family}: {world_object.name}")
 
@@ -522,7 +404,7 @@ class GameEngine:
             confidence=1.0,
         )
         impact_location = NPC_HOME_LOCATIONS.get(target_id, session.current_location)
-        witnesses = self._derive_witnesses(session, classification, [target_id], [], None, location=impact_location)
+        witnesses = derive_witnesses(session, classification, [target_id], [], None, location=impact_location)
         outcome = self.relationship_policy.evaluate(
             classification,
             actor_id="player",
@@ -530,7 +412,7 @@ class GameEngine:
             witness_ids=witnesses,
             turn=session.turn,
         )
-        self._apply_social_outcome(session, classification, outcome)
+        apply_social_outcome(session, classification, outcome)
 
         target = session.npcs[target_id]
         if effect != "physical_assault":
@@ -647,143 +529,9 @@ class GameEngine:
 
     def _save_session(self, session: GameSession) -> None:
         session.revision = self.session_repository.save(
-            session.session_id, self._serialize_session(session), expected_revision=session.revision
+            session.session_id, serialize_session(session), expected_revision=session.revision
         )
 
-    def _serialize_session(self, session: GameSession) -> dict[str, object]:
-        return {
-            "schema_version": CURRENT_SESSION_SCHEMA_VERSION,
-            "session_id": session.session_id,
-            "turn": session.turn,
-            "current_location": session.current_location,
-            "incident_status": session.incident_status,
-            "objective": session.objective,
-            "npcs": {npc_id: npc.model_dump(mode="json") for npc_id, npc in session.npcs.items()},
-            "relationships": {
-                relationship_id: relationship.model_dump(mode="json")
-                for relationship_id, relationship in session.relationships.items()
-            },
-            "world_objects": {
-                object_id: world_object.model_dump(mode="json")
-                for object_id, world_object in session.world_objects.items()
-            },
-            "player_inventory": build_player_inventory(session).model_dump(mode="json"),
-            "game_action_traces": [trace.model_dump(mode="json") for trace in session.game_action_traces],
-            "social_events": [event.model_dump(mode="json") for event in session.social_events],
-            "dialogue_refused_npc_ids": sorted(session.dialogue_refused_npc_ids),
-            "evidences": {evidence_id: evidence.model_dump(mode="json") for evidence_id, evidence in session.evidences.items()},
-            "events": [event.model_dump(mode="json") for event in session.events],
-            "agent_traces": [trace.model_dump(mode="json") for trace in session.agent_traces],
-            "fallback_notices": [notice.model_dump(mode="json") for notice in session.fallback_notices],
-            "discovered_evidence": sorted(session.discovered_evidence),
-            "canonical_truth": session.canonical_truth,
-            "completed": session.completed,
-            "result": session.result.model_dump(mode="json") if session.result else None,
-            "report": session.report.model_dump(mode="json") if session.report else None,
-            "report_extraction": session.report_extraction.model_dump(mode="json") if session.report_extraction else None,
-        }
-
-    def _migrate_session_payload(self, payload: dict[str, object]) -> tuple[dict[str, object], bool]:
-        version = int(payload.get("schema_version", 1))
-        if version > CURRENT_SESSION_SCHEMA_VERSION:
-            raise ValueError(f"Unsupported future session schema version: {version}")
-        if version == CURRENT_SESSION_SCHEMA_VERSION:
-            return payload, False
-
-        npc_payload = dict(payload.get("npcs", {}))
-        for npc_id, raw_npc in npc_payload.items():
-            if not isinstance(raw_npc, dict):
-                continue
-            raw_npc.setdefault("physical_state", "comatose" if raw_npc.get("is_fallen", False) else "normal")
-            raw_npc.setdefault("is_fallen", raw_npc.get("physical_state") == "comatose")
-            known_fact_ids = [str(item) for item in raw_npc.get("known_fact_ids", [])]
-            if not known_fact_ids:
-                for legacy_fact in raw_npc.get("known_facts", []):
-                    fact_id = LEGACY_FACT_TEXT_TO_ID.get(str(legacy_fact))
-                    if fact_id:
-                        known_fact_ids.append(fact_id)
-                    else:
-                        logger.warning(
-                            "session_migration_unmapped_fact session_id=%s npc_id=%s fact=%s",
-                            payload.get("session_id"),
-                            npc_id,
-                            str(legacy_fact)[:160],
-                        )
-            raw_npc["known_fact_ids"] = list(dict.fromkeys(known_fact_ids))
-            raw_npc["known_facts"] = [
-                FACT_REGISTRY[fact_id].statement
-                for fact_id in raw_npc["known_fact_ids"]
-                if fact_id in FACT_REGISTRY
-            ]
-
-        payload["npcs"] = npc_payload
-        if version < 4:
-            migrated_npcs = {
-                str(npc_id): NPCState.model_validate(raw_npc)
-                for npc_id, raw_npc in npc_payload.items()
-                if isinstance(raw_npc, dict)
-            }
-            relationship_graph = build_relationship_graph(migrated_npcs)
-            payload["relationships"] = {
-                relationship_id: relationship.model_dump(mode="json")
-                for relationship_id, relationship in relationship_graph.items()
-            }
-            payload["world_objects"] = {
-                object_id: world_object.model_dump(mode="json")
-                for object_id, world_object in build_initial_world_objects().items()
-            }
-            payload["social_events"] = []
-            payload["player_inventory"] = {"held_object_ids": [], "max_held_objects": 1}
-            payload["game_action_traces"] = []
-            payload["dialogue_refused_npc_ids"] = []
-        if version < 8:
-            raw_world_objects = dict(payload.get("world_objects", {}))
-            starter_objects = build_initial_world_objects()
-            for item_id in STARTER_ITEM_IDS:
-                if item_id not in raw_world_objects and item_id in starter_objects:
-                    raw_world_objects[item_id] = starter_objects[item_id].model_dump(mode="json")
-            payload["world_objects"] = raw_world_objects
-        payload["schema_version"] = CURRENT_SESSION_SCHEMA_VERSION
-        return payload, True
-
-    def _deserialize_session(self, payload: dict[str, object]) -> GameSession:
-        npc_payload = payload.get("npcs", {})
-        evidence_payload = payload.get("evidences", {})
-        relationship_payload = payload.get("relationships", {})
-        world_object_payload = payload.get("world_objects", {})
-        return GameSession(
-            session_id=str(payload["session_id"]),
-            revision=int(payload.get("_revision", 0)),
-            turn=int(payload.get("turn", 0)),
-            current_location=str(payload.get("current_location", "meeting_room")),
-            incident_status=str(payload.get("incident_status", "ACTIVE")),
-            objective=[str(item) for item in payload.get("objective", [])],
-            npcs={str(npc_id): NPCState.model_validate(npc) for npc_id, npc in dict(npc_payload).items()},
-            relationships={
-                str(relationship_id): RelationshipState.model_validate(relationship)
-                for relationship_id, relationship in dict(relationship_payload).items()
-            },
-            world_objects={
-                str(object_id): WorldObjectState.model_validate(world_object)
-                for object_id, world_object in dict(world_object_payload).items()
-            },
-            game_action_traces=[GameActionTrace.model_validate(trace) for trace in payload.get("game_action_traces", [])],
-            social_events=[SocialEventTrace.model_validate(event) for event in payload.get("social_events", [])],
-            dialogue_refused_npc_ids={str(item) for item in payload.get("dialogue_refused_npc_ids", [])},
-            evidences={
-                str(evidence_id): Evidence.model_validate(evidence)
-                for evidence_id, evidence in dict(evidence_payload).items()
-            },
-            events=[EventLogEntry.model_validate(event) for event in payload.get("events", [])],
-            agent_traces=[AgentTrace.model_validate(trace) for trace in payload.get("agent_traces", [])],
-            fallback_notices=[FallbackNotice.model_validate(notice) for notice in payload.get("fallback_notices", [])],
-            discovered_evidence={str(item) for item in payload.get("discovered_evidence", [])},
-            canonical_truth=[str(item) for item in payload.get("canonical_truth", CANONICAL_TRUTH)],
-            completed=bool(payload.get("completed", False)),
-            result=GameResult.model_validate(payload["result"]) if payload.get("result") else None,
-            report=IncidentReportRequest.model_validate(payload["report"]) if payload.get("report") else None,
-            report_extraction=ReportExtraction.model_validate(payload["report_extraction"]) if payload.get("report_extraction") else None,
-        )
 
     def _classify_intent(
         self,
@@ -799,7 +547,7 @@ class GameEngine:
             available_npc_ids=tuple(session.npcs),
             available_evidence_ids=tuple(session.evidences),
             discovered_evidence_ids=tuple(sorted(session.discovered_evidence)),
-            available_locations=("meeting_room", "dev_area", "qa_desk", "pm_desk"),
+            available_locations=tuple(LOCATION_LABELS),
             available_actions=tuple(AVAILABLE_ACTIONS),
             available_evidences=tuple(
                 f"{evidence.id}: {evidence.title} — {evidence.summary}"
@@ -915,7 +663,7 @@ class GameEngine:
     def _validate_intent_hint(self, session: GameSession, candidate: IntentClassification) -> IntentClassification:
         if candidate.intent != "move":
             raise InvalidIntentHintError("Only move intent hints are accepted from Office controls.")
-        if candidate.location not in ("meeting_room", "dev_area", "qa_desk", "pm_desk"):
+        if candidate.location not in LOCATION_LABELS:
             raise InvalidIntentHintError("Office control requested an unknown location.")
         if candidate.target_npc_id is not None or candidate.evidence_id is not None:
             raise InvalidIntentHintError("Move intent hints cannot target NPCs or evidence.")
@@ -1069,14 +817,14 @@ class GameEngine:
             if classification.object_id in session.world_objects
             else None
         )
-        witness_ids = self._derive_witnesses(
+        witness_ids = derive_witnesses(
             session,
             classification,
             direct_target_ids,
             affected_target_ids,
             object_owner_id,
         )
-        repeated = self._is_repeated_social_action(session, classification)
+        repeated = is_repeated_social_action(session, classification)
         outcome = self.relationship_policy.evaluate(
             classification,
             actor_id="player",
@@ -1088,7 +836,7 @@ class GameEngine:
             power_abuse="power_abuse" in classification.reason_codes,
             turn=session.turn,
         )
-        outcome_checks = self._validate_social_outcome(session, classification, outcome)
+        outcome_checks = validate_social_outcome(session, classification, outcome)
         guardrails.extend(outcome_checks)
         if any(not check.passed for check in outcome_checks):
             failed_checks = ", ".join(check.name for check in outcome_checks if not check.passed)
@@ -1101,7 +849,7 @@ class GameEngine:
             outcome = SocialPolicyOutcome(conduct_level="inappropriate")
             fallback_used = True
         else:
-            self._apply_social_outcome(session, classification, outcome)
+            apply_social_outcome(session, classification, outcome)
 
         return self._record_social_trace_and_message(
             session,
@@ -1120,7 +868,7 @@ class GameEngine:
         text: str,
         target_hint: str | None,
     ) -> SocialImpactContext:
-        available_npc_ids = self._npc_ids_at_location(session)
+        available_npc_ids = npc_ids_at_location(session)
         available_objects = [
             world_object
             for world_object in session.world_objects.values()
@@ -1146,15 +894,6 @@ class GameEngine:
             ),
         )
 
-    def _npc_ids_at_location(self, session: GameSession, location: str | None = None) -> list[str]:
-        resolved_location = location or session.current_location
-        if resolved_location == "meeting_room":
-            return list(session.npcs)
-        return [
-            npc_id
-            for npc_id in session.npcs
-            if NPC_HOME_LOCATIONS.get(npc_id) == resolved_location
-        ]
 
     def _validate_social_classification(
         self,
@@ -1176,7 +915,7 @@ class GameEngine:
             else:
                 object_action_possible = object_action_possible and object_state.destructible
         severity_min, severity_max = SEVERITY_RANGES[classification.action_family]
-        recovery_valid = self._recovery_transition_valid(session, classification)
+        recovery_valid = recovery_transition_valid(session, classification)
         return [
             GuardrailCheck(
                 name="action_family_allowed",
@@ -1230,209 +969,6 @@ class GameEngine:
             ),
         ]
 
-    def _recovery_transition_valid(
-        self,
-        session: GameSession,
-        classification: SocialImpactClassification,
-    ) -> bool:
-        if classification.action_family not in RECOVERY_ACTION_FAMILIES:
-            return True
-        relationships = [
-            session.relationships[relationship_key(npc_id, "player")]
-            for npc_id in classification.direct_target_ids
-            if relationship_key(npc_id, "player") in session.relationships
-        ]
-        if not relationships:
-            return False
-        if classification.action_family == "apology":
-            return all(edge.repair_stage in {"none", "acknowledged", "apologized"} for edge in relationships)
-        if classification.action_family == "repair_action":
-            return all(edge.repair_stage == "apologized" for edge in relationships)
-        return all(edge.repair_stage == "repaired" for edge in relationships)
-
-    def _derive_witnesses(
-        self,
-        session: GameSession,
-        classification: SocialImpactClassification,
-        direct_target_ids: list[str],
-        affected_target_ids: list[str],
-        object_owner_id: str | None,
-        location: str | None = None,
-    ) -> list[str]:
-        if not classification.observable:
-            return []
-        participants = {*direct_target_ids, *affected_target_ids}
-        if object_owner_id:
-            participants.add(object_owner_id)
-        return [npc_id for npc_id in self._npc_ids_at_location(session, location) if npc_id not in participants]
-
-    def _is_repeated_social_action(
-        self,
-        session: GameSession,
-        classification: SocialImpactClassification,
-    ) -> bool:
-        if not session.social_events:
-            return False
-        previous = session.social_events[-1].classification
-        return (
-            previous.action_family == classification.action_family
-            and bool(set(previous.direct_target_ids) & set(classification.direct_target_ids))
-        )
-
-    def _validate_social_outcome(
-        self,
-        session: GameSession,
-        classification: SocialImpactClassification,
-        outcome: SocialPolicyOutcome,
-    ) -> list[GuardrailCheck]:
-        harmful = classification.action_family in HARMFUL_ACTION_FAMILIES
-        direction_valid = not harmful or all(
-            effect.trust_delta <= 0
-            and effect.tension_delta >= 0
-            and effect.respect_delta <= 0
-            and effect.fear_delta >= 0
-            and effect.grievance_delta >= 0
-            for effect in outcome.relationship_effects
-        )
-        delta_valid = all(
-            abs(value) <= 60
-            for effect in outcome.relationship_effects
-            for value in (
-                effect.trust_delta,
-                effect.tension_delta,
-                effect.respect_delta,
-                effect.fear_delta,
-                effect.grievance_delta,
-            )
-        )
-        event_types = {event.event_type for event in outcome.mandatory_world_events}
-        mandatory_valid = True
-        if classification.action_family == "property_aggression":
-            mandatory_valid = "object_damaged" in event_types
-        if classification.action_family == "physical_assault":
-            mandatory_valid = {"security_called", "dialogue_refused"}.issubset(event_types)
-        direct_magnitude = max(
-            (
-                abs(effect.trust_delta)
-                for effect in outcome.relationship_effects
-                if "direct" in effect.reason_codes
-            ),
-            default=0,
-        )
-        witness_bounded = all(
-            abs(effect.trust_delta) <= direct_magnitude
-            for effect in outcome.relationship_effects
-            if "witness" in effect.reason_codes
-        )
-        return [
-            GuardrailCheck(
-                name="policy_entities_valid",
-                passed=all(
-                    effect.source_id in session.npcs
-                    and effect.source_id != effect.target_id
-                    and relationship_key(effect.source_id, effect.target_id) in session.relationships
-                    for effect in outcome.relationship_effects
-                ) and all(effect.npc_id in session.npcs for effect in [*outcome.emotion_effects, *outcome.memory_effects]),
-                detail="Policy effects reference actual NPCs and existing non-self edges.",
-            ),
-            GuardrailCheck(
-                name="policy_direction_valid",
-                passed=direction_valid,
-                detail="Harmful actions cannot improve trust/respect or reduce tension/fear/grievance.",
-            ),
-            GuardrailCheck(
-                name="policy_delta_within_envelope",
-                passed=delta_valid,
-                detail="Relationship deltas stay inside the server-owned per-event envelope.",
-            ),
-            GuardrailCheck(
-                name="mandatory_consequences_present",
-                passed=mandatory_valid,
-                detail="Severe actions include their mandatory world-state consequences.",
-            ),
-            GuardrailCheck(
-                name="witness_impact_bounded",
-                passed=witness_bounded,
-                detail="Witness impact does not exceed direct-target impact.",
-            ),
-        ]
-
-    def _apply_social_outcome(
-        self,
-        session: GameSession,
-        classification: SocialImpactClassification,
-        outcome: SocialPolicyOutcome,
-    ) -> None:
-        harmful = classification.action_family in HARMFUL_ACTION_FAMILIES
-        for effect in outcome.relationship_effects:
-            edge_id = relationship_key(effect.source_id, effect.target_id)
-            edge = session.relationships[edge_id]
-            repair_stage = edge.repair_stage
-            trust_ceiling = edge.trust_ceiling
-            fear_floor = edge.fear_floor
-            direct_or_owner = "direct" in effect.reason_codes or "owner" in effect.reason_codes
-            if harmful and classification.severity >= 4 and direct_or_owner:
-                repair_stage = "none"
-                trust_ceiling = 20
-                fear_floor = max(20, fear_floor)
-            elif classification.action_family == "apology":
-                repair_stage = "apologized"
-            elif classification.action_family == "repair_action":
-                repair_stage = "repaired"
-            elif classification.action_family == "mediation":
-                repair_stage = "mediated"
-                trust_ceiling = None
-                fear_floor = 0
-
-            change_relationship(
-                session, effect.source_id, effect.target_id,
-                trust_delta=effect.trust_delta, tension_delta=effect.tension_delta,
-                respect_delta=effect.respect_delta, fear_delta=effect.fear_delta,
-                grievance_delta=effect.grievance_delta,
-                policy_updates={"repair_stage": repair_stage, "trust_ceiling": trust_ceiling, "fear_floor": fear_floor},
-            )
-
-        for effect in outcome.emotion_effects:
-            npc = session.npcs[effect.npc_id]
-            npc.dynamic_state = npc.dynamic_state.model_copy(
-                update={
-                    "emotion": effect.emotion,
-                    "stress": max(0, min(100, npc.dynamic_state.stress + effect.stress_delta)),
-                    "cooperation": max(0, min(100, npc.dynamic_state.cooperation + effect.cooperation_delta)),
-                }
-            )
-
-        for memory_effect in outcome.memory_effects:
-            npc = session.npcs[memory_effect.npc_id]
-            duplicate = any(
-                memory.summary.casefold() == memory_effect.memory.summary.casefold()
-                for memory in (*npc.recent_memories, *npc.important_memories)
-            )
-            if not duplicate:
-                npc.recent_memories.append(memory_effect.memory)
-                if memory_effect.memory.importance >= 0.75:
-                    npc.important_memories.append(memory_effect.memory)
-            npc.recent_memories = npc.recent_memories[-8:]
-            npc.important_memories = npc.important_memories[-8:]
-
-        direct_targets = set(classification.direct_target_ids)
-        for world_event in outcome.mandatory_world_events:
-            if world_event.event_type == "object_damaged" and world_event.target_id in session.world_objects:
-                world_object = session.world_objects[world_event.target_id]
-                next_condition = "destroyed" if world_object.condition == "damaged" else "damaged"
-                session.world_objects[world_event.target_id] = world_object.model_copy(
-                    update={"condition": next_condition, "holder_id": None}
-                )
-            elif world_event.event_type == "security_called":
-                session.incident_status = "SECURITY_ESCALATED"
-            elif world_event.event_type == "hr_escalated" and session.incident_status != "SECURITY_ESCALATED":
-                session.incident_status = "HR_ESCALATED"
-            elif world_event.event_type == "dialogue_refused":
-                session.dialogue_refused_npc_ids.update(direct_targets)
-            self._append_event(session, "POLICY ENGINE", world_event.detail, "policy")
-
-        if classification.action_family == "mediation":
-            session.dialogue_refused_npc_ids.difference_update(direct_targets)
 
     def _record_social_trace_and_message(
         self,
@@ -1537,13 +1073,7 @@ class GameEngine:
 
     def _handle_move(self, session: GameSession, location: str | None) -> str:
         session.current_location = location or "dev_area"
-        location_labels = {
-            "meeting_room": "회의실",
-            "dev_area": "개발 구역",
-            "qa_desk": "QA Desk",
-            "pm_desk": "PM Desk",
-        }
-        self._append_event(session, "System", f"{location_labels[session.current_location]}로 이동했습니다.", "movement")
+        self._append_event(session, "System", f"{LOCATION_LABELS[session.current_location]}로 이동했습니다.", "movement")
         return "현재 위치가 변경되었습니다."
 
     def _handle_summon_meeting(self, session: GameSession) -> str:
@@ -1589,7 +1119,7 @@ class GameEngine:
         if blocked:
             return blocked
         presentation_count = self._evidence_presentation_count(session, target, evidence.id)
-        policy = self._evidence_presentation_policy(session, npc, evidence, presentation_count)
+        policy = evidence_presentation_policy(session, npc, evidence, presentation_count)
         observe_evidence(session, npc, evidence.id)
         self._append_event(session, "Player", f"{npc.name}에게 {evidence.title}를 제시했습니다.", "evidence", target,
                            evidence_id=evidence.id, recipient_npc_id=target, evidence_operation="presented")
@@ -1635,108 +1165,6 @@ class GameEngine:
     def _evidence_presentation_count(self, session: GameSession, target_id: str, evidence_id: str) -> int:
         return presentation_count(session, target_id, evidence_id)
 
-    def _evidence_presentation_policy(
-        self,
-        session: GameSession,
-        npc: NPCState,
-        evidence: Evidence,
-        presentation_count: int,
-    ) -> dict[str, object]:
-        if presentation_count > 0:
-            return {
-                "reaction_type": "repeated_presentation",
-                "emotion": npc.dynamic_state.emotion,
-                "stress_delta": 0,
-                "trust_delta": 0,
-                "cooperation_delta": 0,
-                "belief_updates": [],
-                "memory_candidate": None,
-                "fallback_dialogue": "이 증거는 이미 확인했습니다. 같은 내용을 다시 제시해도 판단은 달라지지 않습니다.",
-            }
-
-        if evidence.source_npc_id == npc.id:
-            return {
-                "reaction_type": "same_source_acknowledgement",
-                "emotion": npc.dynamic_state.emotion,
-                "stress_delta": 0,
-                "trust_delta": 0,
-                "cooperation_delta": 1,
-                "belief_updates": [],
-                "memory_candidate": Memory(
-                    summary=f"Player asked {npc.name} to confirm the evidence they provided.",
-                    importance=0.55,
-                    turn=session.turn,
-                ),
-                "fallback_dialogue": "이 메시지는 제가 보낸 경고입니다. 이미 알고 있는 내용이니, 어떻게 처리됐는지 확인해 주세요.",
-            }
-
-        if npc.id == "backend_01" and evidence.id == "qa_warning_message":
-            belief = Belief(
-                subject="incident",
-                belief="The ignored QA warning and API schema change jointly enabled the outage.",
-                confidence=0.85,
-            )
-            return {
-                "reaction_type": "accountability_pressure",
-                "emotion": "uneasy",
-                "stress_delta": 8,
-                "trust_delta": 3,
-                "cooperation_delta": 1,
-                "belief_updates": [belief],
-                "memory_candidate": Memory(
-                    summary="Player presented the QA warning message during the incident review.",
-                    importance=0.7,
-                    turn=session.turn,
-                ),
-                "fallback_dialogue": "QA 경고가 있었던 것은 확인했습니다. 제가 API 응답 스키마를 변경한 상태에서 배포를 진행했고, 당시 판단 과정을 다시 검토하겠습니다.",
-            }
-
-        if npc.id == "frontend_01":
-            return {
-                "reaction_type": "cross_role_review",
-                "emotion": "focused",
-                "stress_delta": 3,
-                "trust_delta": 1,
-                "cooperation_delta": 3,
-                "belief_updates": [],
-                "memory_candidate": Memory(
-                    summary="Player presented QA evidence for cross-role API review.",
-                    importance=0.65,
-                    turn=session.turn,
-                ),
-                "fallback_dialogue": "QA 경고와 API 변경 내용을 함께 확인해 보겠습니다. 프론트엔드 반영 시점도 다시 점검하겠습니다.",
-            }
-
-        if npc.id == "pm_01":
-            return {
-                "reaction_type": "accountability_pressure",
-                "emotion": "concerned",
-                "stress_delta": 4,
-                "trust_delta": 1,
-                "cooperation_delta": 2,
-                "belief_updates": [],
-                "memory_candidate": Memory(
-                    summary="Player presented QA evidence about the deployment decision.",
-                    importance=0.65,
-                    turn=session.turn,
-                ),
-                "fallback_dialogue": "배포 전에 이런 경고가 있었다면 일정과 승인 과정에서 검토했어야 합니다.",
-            }
-
-        return {
-            "reaction_type": "cross_role_review",
-            "emotion": "uneasy",
-            "stress_delta": 2,
-            "trust_delta": 1,
-            "cooperation_delta": 1,
-            "belief_updates": [],
-            "memory_candidate": Memory(
-                summary=f"Player presented {evidence.title} during the incident review.",
-                importance=0.6,
-                turn=session.turn,
-            ),
-            "fallback_dialogue": "제시된 증거를 확인했습니다. 이 내용이 어떻게 처리됐는지 함께 확인해 보겠습니다.",
-        }
 
     def _request_evidence(
         self,
@@ -1886,49 +1314,11 @@ class GameEngine:
         *, social_classification: SocialImpactClassification | None = None,
         social_outcome: SocialPolicyOutcome | None = None,
     ) -> tuple[AgentDecision, bool]:
-        question_type = intent.question_type if intent is not None else "none"
-        reference_scope = intent.reference_scope if intent is not None else "none"
-        referenced_evidence_id = intent.evidence_id if intent is not None else None
-        visible_ids = visible_evidence_ids(session, npc)
-        referenced_evidence = session.evidences.get(referenced_evidence_id or "") if referenced_evidence_id in visible_ids else None
-        fact_ids = available_fact_ids(session, npc)
-        context_npc = npc.model_copy(deep=True, update={
-            "known_fact_ids": fact_ids,
-            "known_facts": [FACT_REGISTRY[fact_id].statement for fact_id in fact_ids if fact_id in FACT_REGISTRY],
-        })
-        edge = session.relationships[relationship_key(npc.id, "player")]
-        required_kind = "refusal" if npc.id in session.dialogue_refused_npc_ids else "recovery_pending" if edge.trust_ceiling is not None else "reply"
-        context = DecisionContext(
-            mode=mode,
-            social_classification=social_classification,
-            social_outcome=social_outcome,
-            required_response_kind=required_kind,
-            player_input=player_input,
-            turn=session.turn,
-            npc=context_npc,
-            target_npc_id=npc.id,
-            available_facts=tuple(
-                f"{fact_id}: {FACT_REGISTRY[fact_id].statement}"
-                for fact_id in fact_ids
-                if fact_id in FACT_REGISTRY
-            ),
-            available_evidence_ids=tuple(session.evidences),
-            recent_events=self._decision_recent_events(session, mode, npc),
-            visible_evidences=tuple(session.evidences[eid] for eid in sorted(visible_ids)),
-            available_npcs=tuple(f"{item.id}: {item.name} ({item.role})" for item in session.npcs.values()),
-            incident_rules=tuple(INCIDENT_RULES),
-            question_type=question_type,
-            reference_scope=reference_scope,
-            discovered_evidence_ids=tuple(sorted(session.discovered_evidence)),
-            referenced_evidence_id=referenced_evidence.id if referenced_evidence is not None else None,
-            referenced_evidence_title=referenced_evidence.title if referenced_evidence is not None else None,
-            referenced_evidence_summary=referenced_evidence.summary if referenced_evidence is not None else None,
-            referenced_evidence_content=referenced_evidence.content if referenced_evidence is not None else None,
-            responsibility_map=tuple(
-                f"{fact_id}: {FACT_REGISTRY[fact_id].statement}"
-                for fact_id in RESPONSIBILITY_FACT_IDS
-            ),
-        )
+        context = build_decision_context(session, npc, mode, player_input, intent,
+                                         social_classification=social_classification, social_outcome=social_outcome)
+        question_type = context.question_type
+        visible_ids = {evidence.id for evidence in context.visible_evidences}
+        required_kind = context.required_response_kind
         try:
             decision = self.provider.decide(context)
             if mode == "social_reaction" and (
@@ -1941,7 +1331,7 @@ class GameEngine:
                                       "Social narration attempted state changes or contradicted the required response kind.")
                 return self.fallback_provider.decide(context), True
             allowed_evidence_ids = visible_ids
-            if mode in {"talk", "ask", "social_reaction"} and self._contains_evidence_leak(
+            if mode in {"talk", "ask", "social_reaction"} and contains_evidence_leak(
                 session,
                 decision.dialogue,
                 allowed_evidence_ids,
@@ -1971,7 +1361,7 @@ class GameEngine:
                     reason="Dialogue directed the player to a role that is not an available NPC.",
                 )
                 return self.fallback_provider.decide(context), True
-            if mode == "show_evidence" and self._contains_known_fact_contradiction(npc, decision.dialogue):
+            if mode == "show_evidence" and contains_known_fact_contradiction(npc, decision.dialogue):
                 self._record_fallback(
                     session,
                     stage="decision_fact_consistency_guardrail",
@@ -1989,47 +1379,6 @@ class GameEngine:
             )
             return self.fallback_provider.decide(context), True
 
-    def _decision_recent_events(self, session: GameSession, mode: str, npc: NPCState) -> tuple[str, ...]:
-        visible = visible_evidence_ids(session, npc)
-        events = []
-        for event in session.events[-16:]:
-            if event.recipient_npc_id not in {None, npc.id}:
-                continue
-            if event.actor_id not in {None, npc.id}:
-                continue
-            if event.event_type == "fallback":
-                continue
-            if event.event_type == "evidence" and evidence_id_from_event(session, event) not in visible:
-                continue
-            events.append(f"TURN {event.turn} · {event.actor}: {event.message}")
-        return tuple(events[-8:])
-
-    def _contains_evidence_leak(
-        self,
-        session: GameSession,
-        dialogue: str,
-        allowed_evidence_ids: set[str] | None = None,
-    ) -> bool:
-        allowed_evidence_ids = allowed_evidence_ids or set()
-        normalized = dialogue.casefold()
-        for evidence_id, evidence in session.evidences.items():
-            if evidence_id in allowed_evidence_ids:
-                continue
-            if evidence.content and len(evidence.content) >= 24:
-                content_prefix = evidence.content[:24].casefold()
-                if content_prefix in normalized:
-                    return True
-        return False
-
-    def _contains_known_fact_contradiction(self, npc: NPCState, dialogue: str) -> bool:
-        """Reject evidence reactions that explicitly deny canonical NPC facts."""
-
-        normalized = dialogue.casefold()
-        for fact_id in npc.known_fact_ids:
-            patterns = KNOWN_FACT_CONTRADICTION_PATTERNS.get(fact_id, ())
-            if any(re.search(pattern, normalized) for pattern in patterns):
-                return True
-        return False
 
     def _apply_decision(
         self,
@@ -2094,79 +1443,9 @@ class GameEngine:
         )
         return trace_decision
 
+
     def _validate_decision(self, session: GameSession, npc: NPCState, decision: AgentDecision) -> list[GuardrailCheck]:
-        action_targets = set(session.npcs) | {None}
-        if decision.action_type == "show_evidence":
-            action_targets = {eid for eid in session.evidences if can_provide_evidence(session, npc, eid)}
-        elif decision.action_target in session.evidences:
-            action_targets |= visible_evidence_ids(session, npc)
-        belief_subjects = set(session.npcs) | {"player", "incident"}
-        return [
-            GuardrailCheck(name="evidence_refs_visible", passed=set(decision.evidence_refs).issubset(visible_evidence_ids(session, npc)),
-                           detail="Evidence claims only cite documents visible to this NPC and player."),
-            GuardrailCheck(name="contact_npcs_available", passed=all(target in session.npcs for target in decision.contact_npc_ids),
-                           detail="Suggested contacts are actual available NPCs."),
-            GuardrailCheck(
-                name="npc_exists",
-                passed=decision.npc_id == npc.id and npc.id in session.npcs,
-                detail="NPC exists in the current session.",
-            ),
-            GuardrailCheck(
-                name="evidence_exists",
-                passed=decision.action_target in action_targets,
-                detail="Action target is a known NPC, evidence, or empty target.",
-            ),
-            GuardrailCheck(
-                name="action_type_allowed",
-                passed=decision.action_type in ALLOWED_AGENT_ACTION_TYPES,
-                detail="Decision action type is in the server-owned action vocabulary.",
-            ),
-            GuardrailCheck(
-                name="belief_subjects_valid",
-                passed=all(belief.subject in belief_subjects for belief in decision.belief_updates),
-                detail="Belief updates reference a known NPC, player, or incident.",
-            ),
-            GuardrailCheck(
-                name="relationship_targets_valid",
-                passed=all(
-                    update.target_npc_id in session.npcs
-                    and update.target_npc_id != npc.id
-                    and relationship_key(npc.id, update.target_npc_id) in session.relationships
-                    for update in decision.relationship_updates
-                ) and len({update.target_npc_id for update in decision.relationship_updates}) == len(decision.relationship_updates),
-                detail="Relationship updates reference NPCs in the current session.",
-            ),
-            GuardrailCheck(
-                name="knowledge_refs_exist",
-                passed=all(fact_id in FACT_REGISTRY for fact_id in decision.knowledge_refs),
-                detail="Knowledge references exist in the server-owned Fact Registry.",
-            ),
-            GuardrailCheck(
-                name="knowledge_refs_present",
-                passed=decision.grounding_type != "fact" or bool(decision.knowledge_refs),
-                detail="Fact-grounded dialogue includes a reference; belief and acknowledgement may omit it.",
-            ),
-            GuardrailCheck(
-                name="knowledge_refs_known_by_npc",
-                passed=all(fact_id in available_fact_ids(session, npc) for fact_id in decision.knowledge_refs),
-                detail="Knowledge references are inside the NPC knowledge boundary.",
-            ),
-            GuardrailCheck(
-                name="knowledge_refs_evidence_valid",
-                passed=all(
-                    FACT_REGISTRY[fact_id].revealable
-                    and all(evidence_id in session.evidences for evidence_id in FACT_REGISTRY[fact_id].source_evidence_ids)
-                    for fact_id in decision.knowledge_refs
-                    if fact_id in FACT_REGISTRY
-                ),
-                detail="Knowledge references are revealable and their evidence exists in the current world state.",
-            ),
-            GuardrailCheck(
-                name="state_ranges_valid",
-                passed=all(-100 <= value <= 100 for value in (decision.trust_delta, decision.stress_delta, decision.cooperation_delta)),
-                detail="Decision deltas are within the allowed range.",
-            ),
-        ]
+        return validate_decision(session, npc, decision)
 
     def _safe_fallback(self, npc: NPCState) -> AgentDecision:
         return AgentDecision(
@@ -2231,15 +1510,5 @@ class GameEngine:
     def _append_event(self, session: GameSession, actor: str, message: str, event_type: str, actor_id: str | None = None,
                       *, evidence_id: str | None = None, recipient_npc_id: str | None = None,
                       evidence_operation: str | None = None) -> None:
-        session.events.append(
-            EventLogEntry(
-                id=len(session.events) + 1,
-                turn=session.turn,
-                actor=actor,
-                actor_id=actor_id,
-                message=message,
-                event_type=event_type,
-                evidence_id=evidence_id, recipient_npc_id=recipient_npc_id, evidence_operation=evidence_operation,
-                created_at=datetime.now(UTC),
-            )
-        )
+        append_event(session, actor, message, event_type, actor_id, evidence_id=evidence_id,
+                     recipient_npc_id=recipient_npc_id, evidence_operation=evidence_operation)

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from app.models import AvailableGameAction, PlayerInventory
 
 if TYPE_CHECKING:
-    from app.game.engine import GameSession
+    from app.game.session import GameSession
 
 
 def build_player_inventory(session: GameSession) -> PlayerInventory:
