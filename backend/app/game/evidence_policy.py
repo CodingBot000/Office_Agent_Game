@@ -161,4 +161,3 @@ def evidence_presentation_policy(
         ),
         "fallback_dialogue": "제시된 증거를 확인했습니다. 이 내용이 어떻게 처리됐는지 함께 확인해 보겠습니다.",
     }
-

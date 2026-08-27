@@ -24,6 +24,17 @@ def test_openai_report_provider_uses_report_schema(monkeypatch):
     context = ReportContext(IncidentReportRequest(primary_cause="다른 원인"), REPORT_CRITERIA, ())
     assert provider.extract(context).claims == []
 
+
+@pytest.mark.parametrize("body", [b"not-json", b"[]", b'{"output":null}', b'{"output":[{"content":null}]}'])
+def test_malformed_response_envelope_is_a_provider_failure(monkeypatch, body):
+    from app.providers.openai import OpenAIStructuredExecutor
+    from app.models import ReportExtraction
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(body))
+    executor = OpenAIStructuredExecutor(Settings(ai_provider="openai", openai_api_key="test-key"))
+    with pytest.raises(ProviderError):
+        executor.run(ReportExtraction, "test")
+
 from app.config import Settings
 from app.game.seed import INCIDENT_RULES, build_initial_npcs
 from app.providers.base import DecisionContext, IntentContext, ProviderError, SocialImpactContext

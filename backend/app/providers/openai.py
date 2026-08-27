@@ -66,6 +66,11 @@ class OpenAIStructuredExecutor:
             raise ProviderError(f"OpenAI Responses API failed ({exc.code}): {detail[-500:]}") from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             raise ProviderError(f"OpenAI Responses API connection failed: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise ProviderError("OpenAI Responses API returned an invalid JSON envelope") from exc
+
+        if not isinstance(response_payload, dict):
+            raise ProviderError("OpenAI Responses API returned a non-object envelope")
 
         output_text = response_payload.get("output_text") or self._extract_output_text(response_payload)
         if not output_text:
@@ -76,10 +81,16 @@ class OpenAIStructuredExecutor:
             raise ProviderError(f"OpenAI Responses API returned invalid {model_type.__name__} JSON") from exc
 
     def _extract_output_text(self, response_payload: dict[str, object]) -> str | None:
-        for item in response_payload.get("output", []):
+        output = response_payload.get("output")
+        if not isinstance(output, list):
+            return None
+        for item in output:
             if not isinstance(item, dict):
                 continue
-            for content in item.get("content", []):
+            contents = item.get("content")
+            if not isinstance(contents, list):
+                continue
+            for content in contents:
                 if isinstance(content, dict) and content.get("type") == "output_text":
                     text = content.get("text")
                     if isinstance(text, str):

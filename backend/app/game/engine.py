@@ -1133,6 +1133,15 @@ class GameEngine:
             "Respond to the evidence without inventing facts or changing the supplied evidence."
         )
         decision, provider_fallback = self._request_decision(session, npc, "show_evidence", policy_context)
+        validation_candidate = decision.model_copy(update={"action_target": evidence.id}) if (
+            decision.action_type == "show_evidence" and decision.action_target is None
+        ) else decision
+        failed = [check.name for check in self._validate_decision(session, npc, validation_candidate) if not check.passed]
+        if failed:
+            self._record_fallback(session, "decision_guardrail", self.provider.name,
+                                  f"Evidence reaction rejected: {', '.join(failed)}")
+            decision = self._safe_fallback(npc)
+            provider_fallback = True
         safe_decision = decision.model_copy(
             update={
                 "npc_id": npc.id,

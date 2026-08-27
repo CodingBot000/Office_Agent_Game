@@ -82,6 +82,15 @@ def test_openapi_contains_unity_client_contract() -> None:
     assert {"interaction_kind", "game_action_family", "question_type", "reference_scope"}.issubset(
         intent["properties"]
     )
+    assert {"command_kind", "referenced_evidence_ids"}.issubset(intent["properties"])
+    assert "revision" in snapshot["properties"]
+    assert "observed_evidence_ids" in npc_state["properties"]
+    assert {"evidence_refs", "contact_npc_ids", "response_kind"}.issubset(agent_decision["properties"])
+    event = schema["components"]["schemas"]["EventLogEntry"]
+    assert {"evidence_id", "recipient_npc_id", "evidence_operation"}.issubset(event["properties"])
+    for endpoint in ("actions", "game-actions", "report", "reset"):
+        assert "409" in paths[f"/api/v1/sessions/{{session_id}}/{endpoint}"]["post"]["responses"]
+    assert "503" in paths["/api/v1/sessions/{session_id}/report"]["post"]["responses"]
 
     world_object = schema["components"]["schemas"]["WorldObjectState"]
     assert "holder_id" in world_object["properties"]

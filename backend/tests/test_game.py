@@ -152,6 +152,23 @@ def test_npc_cannot_reveal_another_npcs_unobserved_evidence():
     assert "제공할 수 없는 증거" in response.message
 
 
+def test_evidence_reaction_does_not_erase_invalid_private_fact_references():
+    class PrivateFactReaction:
+        name = "openai"
+        model = "test"
+        def decide(self, context):
+            return AgentDecision(npc_id=context.npc.id, emotion="calm", stress_delta=0, trust_delta=0,
+                cooperation_delta=0, action_type="show_evidence", knowledge_refs=["backend_knew_deploy_risk"],
+                dialogue="PRIVATE CLAIM MUST NOT BE EXPOSED")
+
+    engine = GameEngine(provider=PrivateFactReaction())
+    session = engine.get_session(engine.create_session().session_id)
+    session.discovered_evidence.add("qa_warning_message")
+    message = engine._show_evidence(session, "qa_01", "qa_warning_message")
+    assert "PRIVATE CLAIM" not in message
+    assert session.agent_traces[-1].fallback_used
+
+
 def test_comparison_context_includes_only_documents_observed_by_the_npc():
     class ComparisonIntent:
         name = "cli"
