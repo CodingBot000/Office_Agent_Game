@@ -37,13 +37,14 @@ export function startSession(): Promise<GameSnapshot> {
   return request<GameSnapshot>("/api/v1/sessions", { method: "POST" });
 }
 
-export function getSession(sessionId: string): Promise<GameSnapshot> {
-  return request<GameSnapshot>(`/api/v1/sessions/${sessionId}`);
+export function getSession(sessionId: string, signal?: AbortSignal): Promise<GameSnapshot> {
+  return request<GameSnapshot>(`/api/v1/sessions/${sessionId}`, { signal });
 }
 
-export function submitAction(sessionId: string, text: string, intentHint?: IntentClassification, targetHint?: string | null): Promise<ActionResponse> {
+export function submitAction(sessionId: string, text: string, intentHint?: IntentClassification, targetHint?: string | null, signal?: AbortSignal): Promise<ActionResponse> {
   return request<ActionResponse>(`/api/v1/sessions/${sessionId}/actions`, {
     method: "POST",
+    signal,
     body: JSON.stringify({
       text,
       ...(intentHint ? { intent_hint: intentHint } : {}),
@@ -52,24 +53,27 @@ export function submitAction(sessionId: string, text: string, intentHint?: Inten
   });
 }
 
-export function submitGameAction(sessionId: string, actionId: string): Promise<GameActionResponse> {
+export function submitGameAction(sessionId: string, actionId: string, signal?: AbortSignal): Promise<GameActionResponse> {
   return request<GameActionResponse>(`/api/v1/sessions/${sessionId}/game-actions`, {
     method: "POST",
+    signal,
     body: JSON.stringify({ action_id: actionId }),
   });
 }
 
-export function resetSession(sessionId: string): Promise<GameSnapshot> {
-  return request<GameSnapshot>(`/api/v1/sessions/${sessionId}/reset`, { method: "POST" });
+export function resetSession(sessionId: string, signal?: AbortSignal): Promise<GameSnapshot> {
+  return request<GameSnapshot>(`/api/v1/sessions/${sessionId}/reset`, { method: "POST", signal });
 }
 
 export function submitReport(
   sessionId: string,
   primaryCause: string,
   contributingFactors: string[],
+  signal?: AbortSignal,
 ): Promise<GameSnapshot> {
   return request<GameSnapshot>(`/api/v1/sessions/${sessionId}/report`, {
     method: "POST",
+    signal,
     body: JSON.stringify({
       primary_cause: primaryCause,
       contributing_factors: contributingFactors,
