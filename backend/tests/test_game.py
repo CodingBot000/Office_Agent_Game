@@ -7,6 +7,26 @@ from app.models import AgentDecision, FactDefinition, IncidentReportRequest, Int
 from app.providers.deterministic import DeterministicDecisionProvider, DeterministicIntentProvider
 
 
+@pytest.mark.parametrize("text", ["로그 분석부터 진행하도록 지시합니다", "롤백하지 말고 원인부터 확인해", "do not rollback"])
+def test_unsupported_or_negated_order_does_not_start_rollback(text):
+    engine = GameEngine()
+    response = engine.submit_action(engine.create_session().session_id, text)
+    assert response.snapshot.incident_status == "ACTIVE"
+    assert not any(event.message == "배포 중단 및 롤백을 지시했습니다." for event in response.snapshot.events)
+
+
+def test_order_without_explicit_command_kind_is_not_executed():
+    class UnspecifiedOrder:
+        name = "cli"
+        model = "test"
+        def classify(self, context): return IntentClassification(intent="order", target_npc_id="backend_01")
+
+    engine = GameEngine(intent_provider=UnspecifiedOrder())
+    response = engine.submit_action(engine.create_session().session_id, "로그 분석을 진행하세요")
+    assert response.snapshot.incident_status == "ACTIVE"
+    assert "실행하지 않았습니다" in response.message
+
+
 @pytest.mark.parametrize("dialogue", [
     "이미 확보한 QA warning message와 API schema diff를 함께 확인하겠습니다.",
     "Team Lead는 대화 대상이 아니므로 PM에게 승인 경위를 확인해 주세요.",

@@ -171,6 +171,9 @@ Rules:
   when evidence_id is present in discovered_evidence_ids.
 - Use location only for move or summon_meeting intents.
 - Choose the closest action from available_actions.
+- For order, command_kind=rollback only when the player explicitly requests rollback or deployment
+  suspension. Negated, hypothetical, analytical, or unsupported work orders must have command_kind=null.
+  Never convert an instruction to analyze logs into rollback.
 - Never invent a target, evidence, location, or action.
 
 Current context:

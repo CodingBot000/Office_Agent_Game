@@ -351,6 +351,7 @@ class AgentDecision(BaseModel):
 
 class IntentClassification(BaseModel):
     intent: ActionType
+    command_kind: Literal["rollback"] | None = None
     interaction_kind: InteractionKind = "dialogue"
     game_action_family: GameActionFamily | None = None
     question_type: QuestionType = "none"

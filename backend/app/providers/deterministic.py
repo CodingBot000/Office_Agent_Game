@@ -1,3 +1,5 @@
+import re
+
 from app.models import AgentDecision, IntentClassification, Memory, SocialImpactClassification
 from app.game.seed import RESPONSIBILITY_FACT_IDS
 from app.providers.base import (
@@ -141,7 +143,8 @@ class DeterministicIntentProvider:
         if any(keyword in normalized for keyword in ("회의", "모두", "summon")):
             return self._result("summon_meeting", target_npc_id, 0.8, location="meeting_room")
         if any(keyword in normalized for keyword in ("롤백", "rollback", "배포 중단")):
-            return self._result("order", target_npc_id, 0.8)
+            negated = bool(re.search(r"(?:롤백|배포\s*중단).{0,12}(?:하지\s*(?:마|말|않)|금지)|(?:do not|don't|never)\s+roll\s*back", normalized))
+            return self._result("order", target_npc_id, 0.8, command_kind=None if negated else "rollback")
         if any(keyword in normalized for keyword in ("옹호", "두둔", "잘못이 아니", "책임이 없", "defend")):
             return self._result("defend", target_npc_id, 0.8)
         latest_evidence_id = context.latest_discovered_evidence_id
@@ -182,9 +185,11 @@ class DeterministicIntentProvider:
         game_action_family: str | None = None,
         question_type: str = "none",
         reference_scope: str = "none",
+        command_kind: str | None = None,
     ) -> IntentClassification:
         return IntentClassification(
             intent=intent,  # type: ignore[arg-type]
+            command_kind=command_kind,
             interaction_kind=interaction_kind,  # type: ignore[arg-type]
             game_action_family=game_action_family,  # type: ignore[arg-type]
             question_type=question_type,  # type: ignore[arg-type]

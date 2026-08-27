@@ -970,7 +970,7 @@ class GameEngine:
             "ask": lambda: self._ask_npc(session, target_id, text, intent),
             "accuse": lambda: self._accuse_npc(session, target_id, text),
             "defend": lambda: self._defend_npc(session, target_id, text),
-            "order": lambda: self._handle_order(session),
+            "order": lambda: self._handle_order(session, intent),
             "inspect": lambda: self._inspect_evidence(session, text, intent.evidence_id),
             "show_evidence": lambda: self._show_evidence(session, target_id, intent.evidence_id),
             "request_evidence": lambda: self._request_evidence(session, target_id, intent.evidence_id, text),
@@ -1511,7 +1511,11 @@ class GameEngine:
             f"{classification.action_family} 행동의 관계 정책 결과가 적용됐습니다 ({outcome.conduct_level}).",
         )
 
-    def _handle_order(self, session: GameSession) -> str:
+    def _handle_order(self, session: GameSession, intent: IntentClassification) -> str:
+        if intent.command_kind != "rollback":
+            message = "지원되는 명령이 명시되지 않아 실행하지 않았습니다. 현재는 명시적인 배포 중단·롤백 지시만 실행할 수 있습니다."
+            self._append_event(session, "System", message, "guardrail")
+            return message
         self._append_event(session, "System", "배포 중단 및 롤백을 지시했습니다.", "command")
         session.incident_status = "MITIGATING"
         return "롤백 지시가 기록되었습니다."
