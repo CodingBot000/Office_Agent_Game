@@ -101,6 +101,7 @@ export function GameDialoguePanel({ controller, snapshot, requestBusy, viewportR
         <form className="game-dialogue-form" onSubmit={event => { event.preventDefault(); submit(); }}>
           <input ref={inputRef} aria-label="대화 내용" aria-describedby="game-dialogue-title" placeholder="대화 내용을 입력하세요"
             value={state.draft} onChange={event => controller.setDraft(event.target.value)} disabled={!canSend} autoComplete="off"
+            onBlur={() => ime.current.reset()}
             onCompositionStart={() => ime.current.start()} onCompositionEnd={() => ime.current.end()}
             onKeyDown={event => {
               if (!isEnter(event.nativeEvent)) return;

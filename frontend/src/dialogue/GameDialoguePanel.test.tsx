@@ -68,6 +68,18 @@ describe("Unity dialog interactions", () => {
     expect(input().disabled).toBe(true);
   });
 
+  it("clears an unfinished IME confirmation when focus leaves the input", async () => {
+    const send = vi.fn(async () => response());
+    render(<Harness send={send} />); openQa();
+    fireEvent.change(input(), { target: { value: "한글 확인" } });
+    fireEvent.compositionStart(input());
+    fireEvent.keyDown(input(), { code: "Enter", key: "Enter", keyCode: 229, isComposing: true });
+    fireEvent.blur(input());
+    fireEvent.focus(input());
+    fireEvent.keyDown(input(), { code: "Enter", key: "Enter", keyCode: 13 });
+    await waitFor(() => expect(send).toHaveBeenCalledExactlyOnceWith("한글 확인", "qa_01"));
+  });
+
   it("uses a discovered evidence button and renders untrusted text without HTML", async () => {
     const current = snapshot(); current.evidences[0].discovered = true;
     const send = vi.fn(async () => response({ message: '<img src=x onerror="alert(1)">' }));
