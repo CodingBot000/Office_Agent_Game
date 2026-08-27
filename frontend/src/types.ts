@@ -122,6 +122,7 @@ export interface NPCState {
   is_fallen: boolean;
   known_fact_ids: string[];
   known_facts: string[];
+  observed_evidence_ids?: string[];
   beliefs: Belief[];
   relationships: Relationship[];
   recent_memories: Memory[];
@@ -144,6 +145,9 @@ export interface EventLogEntry {
   actor_id: string | null;
   message: string;
   event_type: string;
+  evidence_id?: string | null;
+  recipient_npc_id?: string | null;
+  evidence_operation?: "discovered" | "presented" | "response" | null;
   created_at: string;
 }
 
@@ -163,6 +167,9 @@ export interface AgentDecision {
   relationship_updates: RelationshipUpdate[];
   grounding_type: "fact" | "belief" | "acknowledgement";
   knowledge_refs: string[];
+  evidence_refs?: string[];
+  contact_npc_ids?: string[];
+  response_kind?: "reply" | "refusal" | "recovery_pending";
   memory_candidate: Memory | null;
   action_type: string;
   action_target: string | null;
@@ -275,10 +282,15 @@ export interface GameResult {
   team_trust: number;
   recovery_efficiency: number;
   summary: string;
+  matched_criteria?: string[];
+  missing_criteria?: string[];
+  contradicted_criteria?: string[];
+  evaluation_provider?: string | null;
 }
 
 export interface GameSnapshot {
   session_id: string;
+  revision?: number;
   turn: number;
   current_location: string;
   incident_status: string;
@@ -328,12 +340,14 @@ export interface GameActionResponse {
 
 export interface IntentClassification {
   intent: string;
+  command_kind?: "rollback" | null;
   interaction_kind?: "dialogue" | "game_action_attempt";
   game_action_family?: string | null;
   question_type?: QuestionType;
   reference_scope?: ReferenceScope;
   target_npc_id?: string | null;
   evidence_id?: string | null;
+  referenced_evidence_ids?: string[];
   location?: "meeting_room" | "dev_area" | "qa_desk" | "pm_desk" | null;
   confidence?: number;
 }

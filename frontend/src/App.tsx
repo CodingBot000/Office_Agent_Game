@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
+import { ApiError, getSession, resetSession, startSession, submitAction, submitGameAction, submitReport } from "./api";
 import { formatEmotion, formatWorldObjectName, GameActionLabel } from "./display";
 import { ModeChooser, VisualOffice } from "./VisualOffice";
 import type {
@@ -118,6 +118,22 @@ function App() {
   );
   const latestFallback = snapshot?.fallback_notices[snapshot.fallback_notices.length - 1] ?? null;
 
+  async function recoverRequestError(reason: unknown, sessionId: string, fallbackMessage: string): Promise<string> {
+    if (reason instanceof ApiError && reason.status === 409) {
+      try {
+        setSnapshot(await getSession(sessionId));
+        setLastIntent(null);
+        return "다른 요청으로 세션이 변경되어 최신 상태를 불러왔습니다. 내용을 확인한 뒤 다시 시도해 주세요.";
+      } catch (reloadError: unknown) {
+        if (reloadError instanceof ApiError && reloadError.status === 404) {
+          return "이 세션은 다른 요청에서 초기화되었습니다. 페이지를 새로고침해 새 세션을 시작해 주세요.";
+        }
+        return "요청이 충돌했고 최신 상태를 불러오지 못했습니다. 연결을 확인한 뒤 다시 시도해 주세요.";
+      }
+    }
+    return reason instanceof Error ? reason.message : fallbackMessage;
+  }
+
   async function executeCommand(text: string, intentHint?: IntentClassification, targetHintOverride?: string | null) {
     if (!snapshot || !text.trim() || submitting || snapshot.completed) return;
     const submittedText = text.trim();
@@ -141,7 +157,7 @@ function App() {
       setCommand("");
       setTargetHint(null);
     } catch (reason: unknown) {
-      const message = reason instanceof Error ? reason.message : "명령 처리에 실패했습니다.";
+      const message = await recoverRequestError(reason, snapshot.session_id, "명령 처리에 실패했습니다.");
       setError(message);
       setPendingCommand({ text: submittedText, turn: snapshot.turn + 1, status: "error", error: message });
     } finally {
@@ -160,7 +176,7 @@ function App() {
       setActionAlert(response.blocked ? `차단됨: ${response.message} ${response.alert ?? ""}`.trim() : response.message);
       return !response.blocked;
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "게임 행동 처리에 실패했습니다.");
+      setError(await recoverRequestError(reason, snapshot.session_id, "게임 행동 처리에 실패했습니다."));
       return false;
     } finally {
       setSubmitting(false);
@@ -175,8 +191,8 @@ function App() {
   async function handleReset() {
     if (!snapshot || submitting) return;
     setSubmitting(true);
-      setError(null);
-      setActionAlert(null);
+    setError(null);
+    setActionAlert(null);
     try {
       setSnapshot(await resetSession(snapshot.session_id));
       setLastIntent(null);
@@ -186,7 +202,7 @@ function App() {
       setPrimaryCause("");
       setContributingFactors("");
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "세션 초기화에 실패했습니다.");
+      setError(await recoverRequestError(reason, snapshot.session_id, "세션 초기화에 실패했습니다."));
     } finally {
       setSubmitting(false);
     }
@@ -204,7 +220,7 @@ function App() {
         .filter(Boolean);
       setSnapshot(await submitReport(snapshot.session_id, primaryCause.trim(), factors));
     } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "보고서 제출에 실패했습니다.");
+      setError(await recoverRequestError(reason, snapshot.session_id, "보고서 제출에 실패했습니다."));
     } finally {
       setSubmitting(false);
     }
@@ -504,7 +520,7 @@ function App() {
                 );
               })}
             </div>
-            {error && !pendingCommand?.error && <p className="inline-error">{error}</p>}
+            {error && !pendingCommand?.error && <p className="inline-error" role="alert">{error}</p>}
             {actionAlert && <p className="action-alert" role="alert">{actionAlert}</p>}
             {lastIntent && (
               <p className="intent-meta">

@@ -2,20 +2,43 @@ import type { ActionResponse, GameActionResponse, GameSnapshot, IntentClassifica
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || `Request failed: ${response.status}`);
+    const body = await response.text();
+    let message = body || `Request failed: ${response.status}`;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (parsed && typeof parsed === "object" && "detail" in parsed && typeof parsed.detail === "string") {
+        message = parsed.detail;
+      }
+    } catch {
+      // Non-JSON proxy and network error responses still retain their status.
+    }
+    throw new ApiError(response.status, message);
   }
   return response.json() as Promise<T>;
 }
 
 export function startSession(): Promise<GameSnapshot> {
   return request<GameSnapshot>("/api/v1/sessions", { method: "POST" });
+}
+
+export function getSession(sessionId: string): Promise<GameSnapshot> {
+  return request<GameSnapshot>(`/api/v1/sessions/${sessionId}`);
 }
 
 export function submitAction(sessionId: string, text: string, intentHint?: IntentClassification, targetHint?: string | null): Promise<ActionResponse> {

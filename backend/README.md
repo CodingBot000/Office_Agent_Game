@@ -43,6 +43,23 @@ SQLITE_PATH=data/office_agent.db
 
 Provider가 실패하거나 guardrail에서 결과를 거부하면 deterministic fallback이 마지막 방어 수단으로 실행됩니다. 이 경우 화면 banner, Event Log, Agent Inspector, backend warning log에 fallback 원인이 표시됩니다.
 
+보고서 평가는 예외입니다. CLI/OpenAI의 의미 추출이 실패하면 키워드 채점으로 대체하지 않고 HTTP 503을 반환하며 사건을 종료하지 않습니다. 입력을 유지한 뒤 다시 제출할 수 있습니다. `deterministic-mock`의 보고서 해석은 오프라인 데모용 제한된 어휘만 지원하며 실제 모델의 의미 이해 품질을 검증하는 용도가 아닙니다.
+
+## 대화 및 상태 처리
+
+- 관계 수치·월드 결과는 서버가 결정하고, 사회적 행동과 물건 액션의 NPC 반응은 그 결과를 컨텍스트로 받아 생성합니다. 대사 생성 결과가 효과를 다시 적용할 수는 없습니다. 이 경로에는 이전보다 provider 호출이 추가될 수 있습니다.
+- Player가 확보한 증거와 NPC가 직접 확인한 증거를 구분합니다. 공유된 문서가 뒷받침하는 사실만 후속 답변의 근거로 사용하며, 새로운 이벤트는 증거·수신 NPC ID를 저장합니다.
+- `order`는 명시적인 `command_kind=rollback`으로 분류된 경우에만 실행합니다. 지원되지 않는 업무 지시와 부정된 명령은 롤백으로 바꾸지 않습니다.
+- 보고서는 원인 주장·부정·기여 요인을 구조화한 뒤 서버의 시나리오 기준으로 평가합니다. 점수와 요약은 실제 충족·누락·모순 항목에서 계산합니다.
+
+## 동시성 및 저장 호환성
+
+세션은 revision을 비교해 원자적으로 저장합니다. 겹친 요청 중 오래된 상태를 저장하려는 요청은 HTTP 409를 받습니다. 클라이언트는 `GET /sessions/{id}`로 최신 상태를 조회하고 사용자 확인 후 재시도해야 합니다. 서버는 충돌한 AI 요청을 자동으로 재실행하지 않습니다. reset은 기존 세션을 새 ID의 세션으로 원자적으로 교체합니다.
+
+기존 REST 경로와 JSON 필드는 유지하며 `revision`, 관찰 증거·참조·평가 메타데이터를 추가했습니다. 세션 payload는 schema 10이고 이전 payload와 revision 컬럼이 없는 SQLite DB는 자동 마이그레이션합니다. 배포 전에 DB를 백업하세요. 이전 버전 애플리케이션으로 되돌릴 때는 schema 10 데이터를 그대로 읽을 수 없으므로 백업 복원 또는 호환 migration이 필요합니다.
+
+주요 책임은 `game/session.py`, `session_codec.py`, `conversation.py`, `evidence_policy.py`, `social_state.py`, `state_transitions.py`, `reporting.py`로 분리되어 있습니다. `GameEngine`은 요청 순서와 provider 호출을 연결합니다.
+
 ```bash
 uv sync --extra test
 uv run uvicorn app.main:app --reload --port 8000
