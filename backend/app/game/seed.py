@@ -9,6 +9,7 @@ from app.models import (
     Personality,
     Relationship,
     RelationshipState,
+    ReportCriterion,
     WorldObjectDefinition,
     WorldObjectState,
 )
@@ -39,6 +40,17 @@ FACT_DEFINITIONS = [
 ]
 
 FACT_REGISTRY = {fact.id: fact for fact in FACT_DEFINITIONS}
+
+REPORT_CRITERIA = (
+    ReportCriterion(id="schema_mismatch", description="API 응답 계약 불일치가 직접 원인", weight=70,
+                    fact_id="outage_caused_by_schema_mismatch", primary_only=True),
+    ReportCriterion(id="qa_warning_ignored", description="배포 전 QA 경고 미확인", weight=10,
+                    fact_id="team_lead_did_not_confirm_warning"),
+    ReportCriterion(id="schedule_pressure", description="일정 단축과 일정 압박", weight=10,
+                    fact_id="business_requested_shorter_schedule"),
+    ReportCriterion(id="late_contract_communication", description="API 변경 공유 지연", weight=10,
+                    fact_id="frontend_received_change_late"),
+)
 
 # Only facts directly established by the document, not every fact that cites it.
 EVIDENCE_DISCLOSED_FACT_IDS = {

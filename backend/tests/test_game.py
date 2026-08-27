@@ -27,6 +27,77 @@ def test_order_without_explicit_command_kind_is_not_executed():
     assert "실행하지 않았습니다" in response.message
 
 
+def test_report_diagnosis_distinguishes_negation_and_contributing_factors():
+    def evaluate(primary, factors):
+        engine = GameEngine()
+        return engine.submit_report(engine.create_session().session_id,
+            IncidentReportRequest(primary_cause=primary, contributing_factors=factors)).result
+
+    correct = evaluate("API 스키마 불일치가 장애 원인입니다.", ["일정 압박", "변경 공유 지연", "QA 경고 무시"])
+    missing = evaluate("API 스키마 불일치가 장애 원인입니다.", [])
+    wrong = evaluate("API 스키마 문제는 원인이 전혀 아닙니다. 정전이 원인입니다.", [])
+    assert correct.incident_diagnosis > missing.incident_diagnosis > wrong.incident_diagnosis
+    assert wrong.summary != correct.summary
+
+
+def test_report_provider_failure_does_not_finalize_session():
+    from app.providers.base import ProviderError
+    from app.game.reporting import ReportEvaluationError
+
+    class FailedReport:
+        name = "openai"
+        model = "test"
+        def extract(self, context): raise ProviderError("report provider unavailable")
+
+    engine = GameEngine(report_provider=FailedReport())
+    sid = engine.create_session().session_id
+    before = engine.get_session(sid)
+    with pytest.raises(ReportEvaluationError):
+        engine.submit_report(sid, IncidentReportRequest(primary_cause="API 스키마 변경"))
+    after = engine.get_session(sid)
+    assert after.turn == before.turn
+    assert after.revision == before.revision
+    assert after.result is None and not after.completed
+
+
+@pytest.mark.parametrize("update", [
+    {"criterion_id": "invented"}, {"quote": "입력에 없는 인용"},
+    {"source": "contributing_factor", "source_index": 5}, {"evidence_ids": ["qa_warning_message"]},
+])
+def test_report_extraction_must_reference_actual_input_and_discovered_evidence(update):
+    from app.game.reporting import ReportEvaluationError
+    from app.models import ReportExtraction, ReportClaim
+
+    class InvalidReport:
+        name = "cli"
+        model = "test"
+        def extract(self, context):
+            values = dict(criterion_id="schema_mismatch", stance="affirmed", source="primary_cause", quote=context.report.primary_cause)
+            return ReportExtraction(claims=[ReportClaim(**{**values, **update})])
+
+    engine = GameEngine(report_provider=InvalidReport())
+    sid = engine.create_session().session_id
+    with pytest.raises(ReportEvaluationError):
+        engine.submit_report(sid, IncidentReportRequest(primary_cause="API 스키마 불일치"))
+    assert not engine.get_session(sid).completed
+
+
+def test_report_contradiction_overrides_duplicate_affirmations():
+    from app.models import ReportClaim, ReportExtraction
+
+    class ContradictoryReport:
+        name = "openai"
+        model = "test"
+        def extract(self, context):
+            return ReportExtraction(claims=[ReportClaim(criterion_id="schema_mismatch", stance=stance,
+                source="primary_cause", quote=context.report.primary_cause) for stance in ("affirmed", "affirmed", "negated")])
+
+    engine = GameEngine(report_provider=ContradictoryReport())
+    result = engine.submit_report(engine.create_session().session_id, IncidentReportRequest(primary_cause="상반된 설명")).result
+    assert result.incident_diagnosis == 0
+    assert result.contradicted_criteria == ["schema_mismatch"]
+
+
 @pytest.mark.parametrize("dialogue", [
     "이미 확보한 QA warning message와 API schema diff를 함께 확인하겠습니다.",
     "Team Lead는 대화 대상이 아니므로 PM에게 승인 경위를 확인해 주세요.",

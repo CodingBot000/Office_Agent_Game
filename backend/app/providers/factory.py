@@ -7,6 +7,18 @@ from app.providers.deterministic import (
     DeterministicSocialImpactProvider,
 )
 from app.providers.openai import OpenAIDecisionProvider, OpenAIIntentProvider, OpenAISocialImpactProvider
+from app.providers.base import ReportProvider
+from app.providers.cli import CliReportProvider
+from app.providers.openai import OpenAIReportProvider
+from app.providers.deterministic_report import DeterministicReportProvider
+
+
+def create_report_provider(settings: Settings) -> ReportProvider:
+    if settings.ai_provider == "cli":
+        return CliReportProvider(settings)
+    if settings.ai_provider == "openai":
+        return OpenAIReportProvider(settings)
+    return DeterministicReportProvider()
 
 
 def create_provider(settings: Settings) -> AgentProvider:

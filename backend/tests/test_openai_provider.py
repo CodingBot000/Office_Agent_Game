@@ -4,6 +4,26 @@ import urllib.request
 
 import pytest
 
+
+def test_openai_report_provider_uses_report_schema(monkeypatch):
+    from app.providers.openai import OpenAIReportProvider
+    from app.providers.base import ReportContext
+    from app.models import IncidentReportRequest
+    from app.game.seed import REPORT_CRITERIA
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data)
+        assert payload["text"]["format"]["name"] == "reportextraction"
+        schema = payload["text"]["format"]["schema"]
+        assert schema["additionalProperties"] is False
+        assert set(schema["$defs"]["ReportClaim"]["required"]) == set(schema["$defs"]["ReportClaim"]["properties"])
+        return fake_api_response({"claims": []})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    provider = OpenAIReportProvider(Settings(ai_provider="openai", openai_api_key="test-key", openai_model="test-model"))
+    context = ReportContext(IncidentReportRequest(primary_cause="다른 원인"), REPORT_CRITERIA, ())
+    assert provider.extract(context).claims == []
+
 from app.config import Settings
 from app.game.seed import INCIDENT_RULES, build_initial_npcs
 from app.providers.base import DecisionContext, IntentContext, ProviderError, SocialImpactContext

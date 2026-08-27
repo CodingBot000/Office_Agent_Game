@@ -115,3 +115,18 @@ def test_session_conflicts_return_409(monkeypatch, endpoint, method, payload):
     response = client.post(f"/api/v1/sessions/test/{endpoint}", json=payload)
     assert response.status_code == 409
     assert "reload" in response.json()["detail"]
+
+
+def test_report_failure_returns_503_without_completing_session(monkeypatch):
+    from app.main import engine
+    from app.providers.base import ProviderError
+
+    def fail(context): raise ProviderError("unavailable")
+
+    monkeypatch.setattr(engine.report_provider, "extract", fail)
+    sid = client.post("/api/v1/sessions").json()["session_id"]
+    response = client.post(f"/api/v1/sessions/{sid}/report", json={"primary_cause": "test"})
+    assert response.status_code == 503
+    session = client.get(f"/api/v1/sessions/{sid}").json()
+    assert not session["completed"]
+    assert session["turn"] == 0

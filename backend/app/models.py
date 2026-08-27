@@ -468,12 +468,37 @@ class IncidentReportRequest(BaseModel):
     contributing_factors: list[str] = Field(default_factory=list, max_length=10)
 
 
+class ReportCriterion(BaseModel):
+    id: str
+    description: str
+    weight: int
+    fact_id: str
+    primary_only: bool = False
+
+
+class ReportClaim(BaseModel):
+    criterion_id: str
+    stance: Literal["affirmed", "negated", "uncertain"]
+    source: Literal["primary_cause", "contributing_factor"]
+    source_index: int | None = None
+    quote: str = Field(min_length=1, max_length=500)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class ReportExtraction(BaseModel):
+    claims: list[ReportClaim] = Field(default_factory=list, max_length=30)
+
+
 class GameResult(BaseModel):
     incident_diagnosis: int = Field(ge=0, le=100)
     evidence_coverage: int = Field(ge=0, le=100)
     team_trust: int = Field(ge=0, le=100)
     recovery_efficiency: int = Field(ge=0, le=100)
     summary: str
+    matched_criteria: list[str] = Field(default_factory=list)
+    missing_criteria: list[str] = Field(default_factory=list)
+    contradicted_criteria: list[str] = Field(default_factory=list)
+    evaluation_provider: str | None = None
 
 
 GameSnapshot.model_rebuild()

@@ -2,10 +2,25 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from app.models import AgentDecision, Evidence, IntentClassification, NPCState, SocialImpactClassification, SocialPolicyOutcome
+from app.models import IncidentReportRequest, ReportCriterion, ReportExtraction
 
 
 class ProviderError(RuntimeError):
     """Raised when a provider cannot return a validated decision."""
+
+
+@dataclass(frozen=True)
+class ReportContext:
+    report: IncidentReportRequest
+    criteria: tuple[ReportCriterion, ...]
+    discovered_evidence_ids: tuple[str, ...]
+
+
+class ReportProvider(Protocol):
+    name: str
+    model: str
+
+    def extract(self, context: ReportContext) -> ReportExtraction: ...
 
 
 @dataclass(frozen=True)

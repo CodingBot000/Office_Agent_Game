@@ -247,3 +247,17 @@ def test_observed_evidence_and_provenance_survive_sqlite_restart(tmp_path):
     assert "team_lead_did_not_confirm_warning" not in available_fact_ids(session, session.npcs["backend_01"])
     assert "qa_warning_message" not in session.npcs["frontend_01"].observed_evidence_ids
     assert restarted._evidence_presentation_count(session, "backend_01", "qa_warning_message") == 1
+
+
+def test_report_and_extraction_survive_sqlite_restart(tmp_path):
+    from app.models import IncidentReportRequest
+
+    path = str(tmp_path / "report.db")
+    engine = GameEngine(session_repository=SQLiteSessionRepository(path))
+    sid = engine.create_session().session_id
+    report = IncidentReportRequest(primary_cause="API 스키마 불일치가 원인입니다", contributing_factors=["일정 압박"])
+    result = engine.submit_report(sid, report)
+    restored = GameEngine(session_repository=SQLiteSessionRepository(path)).get_session(sid)
+    assert restored.report == report
+    assert restored.report_extraction.claims
+    assert restored.result == result.result

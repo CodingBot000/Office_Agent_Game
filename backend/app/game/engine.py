@@ -25,6 +25,9 @@ from app.game.seed import (
     STARTER_ITEM_IDS,
 )
 from app.game.relationship_policy import RelationshipPolicyEngine
+from app.game.reporting import evaluate_report
+from app.providers.base import ReportProvider
+from app.providers.factory import create_report_provider
 from app.game.state_transitions import change_relationship, npc_response_block
 from app.game.evidence_policy import (
     available_fact_ids, can_provide_evidence, observe_evidence, visible_evidence_ids,
@@ -65,6 +68,7 @@ from app.models import (
     Relationship,
     RelationshipState,
     RelationshipUpdate,
+    ReportExtraction,
     SocialEventTrace,
     SocialImpactClassification,
     SocialPolicyOutcome,
@@ -91,7 +95,7 @@ from app.storage import SessionRepository, create_session_repository
 
 
 logger = logging.getLogger(__name__)
-CURRENT_SESSION_SCHEMA_VERSION = 9
+CURRENT_SESSION_SCHEMA_VERSION = 10
 GAME_ACTION_ALERT = "Use the provided action buttons to perform game actions."
 
 
@@ -149,6 +153,8 @@ class GameSession:
     canonical_truth: list[str] = field(default_factory=lambda: list(CANONICAL_TRUTH))
     completed: bool = False
     result: GameResult | None = None
+    report: IncidentReportRequest | None = None
+    report_extraction: ReportExtraction | None = None
 
 
 class SessionNotFoundError(KeyError):
@@ -169,12 +175,14 @@ class GameEngine:
         social_impact_provider: SocialImpactProvider | None = None,
         settings: Settings | None = None,
         session_repository: SessionRepository | None = None,
+        report_provider: ReportProvider | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.session_repository = session_repository or create_session_repository(self.settings)
         self.provider = provider or create_provider(self.settings)
         self.intent_provider = intent_provider or create_intent_provider(self.settings)
         self.social_impact_provider = social_impact_provider or create_social_impact_provider(self.settings)
+        self.report_provider = report_provider or create_report_provider(self.settings)
         self.fallback_provider = DeterministicDecisionProvider()
         self.intent_fallback_provider = DeterministicIntentProvider()
         self.social_impact_fallback_provider = DeterministicSocialImpactProvider()
@@ -588,9 +596,12 @@ class GameEngine:
         if session.completed:
             return self.snapshot(session)
 
+        result, extraction = evaluate_report(session, report, self.report_provider)
         session.turn += 1
         self._append_event(session, "Player", "최종 Incident Report를 제출했습니다.", "report")
-        session.result = self._score_report(session, report)
+        session.result = result
+        session.report = report
+        session.report_extraction = extraction
         session.completed = True
         session.incident_status = "RESOLVED"
         self._append_event(session, "System", "사건 분석이 종료되었습니다. 결과를 확인하세요.", "system")
@@ -668,6 +679,8 @@ class GameEngine:
             "canonical_truth": session.canonical_truth,
             "completed": session.completed,
             "result": session.result.model_dump(mode="json") if session.result else None,
+            "report": session.report.model_dump(mode="json") if session.report else None,
+            "report_extraction": session.report_extraction.model_dump(mode="json") if session.report_extraction else None,
         }
 
     def _migrate_session_payload(self, payload: dict[str, object]) -> tuple[dict[str, object], bool]:
@@ -768,6 +781,8 @@ class GameEngine:
             canonical_truth=[str(item) for item in payload.get("canonical_truth", CANONICAL_TRUTH)],
             completed=bool(payload.get("completed", False)),
             result=GameResult.model_validate(payload["result"]) if payload.get("result") else None,
+            report=IncidentReportRequest.model_validate(payload["report"]) if payload.get("report") else None,
+            report_extraction=ReportExtraction.model_validate(payload["report_extraction"]) if payload.get("report_extraction") else None,
         )
 
     def _classify_intent(
@@ -2187,24 +2202,6 @@ class GameEngine:
     def _discover_evidence(self, session: GameSession, evidence_id: str) -> None:
         if evidence_id in session.evidences:
             session.discovered_evidence.add(evidence_id)
-
-    def _score_report(self, session: GameSession, report: IncidentReportRequest) -> GameResult:
-        diagnosis_terms = ("api", "schema", "스키마", "백엔드", "backend", "qa", "검증", "배포")
-        diagnosis = 85 if sum(term in report.primary_cause.lower() for term in diagnosis_terms) >= 2 else 35
-        coverage = min(100, 20 + len(session.discovered_evidence) * 25)
-        average_trust = sum(
-            session.relationships[relationship_key(npc.id, "player")].trust
-            for npc in session.npcs.values()
-        ) / len(session.npcs)
-        team_trust = max(0, min(100, round(60 + average_trust / 2)))
-        efficiency = max(20, min(100, 100 - max(0, session.turn - 5) * 4))
-        return GameResult(
-            incident_diagnosis=diagnosis,
-            evidence_coverage=coverage,
-            team_trust=team_trust,
-            recovery_efficiency=efficiency,
-            summary="API schema 변경이 QA 검증 완료 전에 배포된 것이 직접 원인으로 평가되었습니다.",
-        )
 
     def _record_fallback(self, session: GameSession, stage: str, provider: str, reason: str) -> None:
         safe_reason = " ".join(reason.split())[-320:] or "Unknown provider failure"

@@ -4,6 +4,23 @@ from pathlib import Path
 
 import pytest
 
+
+def test_cli_report_provider_uses_shared_structured_executor(monkeypatch):
+    from app.providers.cli import CliReportProvider
+    from app.providers.base import ReportContext
+    from app.models import IncidentReportRequest, ReportExtraction
+    from app.game.seed import REPORT_CRITERIA
+
+    provider = CliReportProvider(Settings(ai_provider="cli"))
+    context = ReportContext(IncidentReportRequest(primary_cause="원인이 아닙니다"), REPORT_CRITERIA, ())
+    def run(model_type, prompt):
+        assert model_type is ReportExtraction
+        assert "원인이 아닙니다" in prompt
+        assert "negated" in prompt
+        return ReportExtraction(claims=[])
+    monkeypatch.setattr(provider.executor, "run", run)
+    assert provider.extract(context).claims == []
+
 from app.config import Settings
 from app.game.seed import build_initial_npcs, INCIDENT_RULES
 from app.providers.base import DecisionContext, IntentContext, ProviderError, SocialImpactContext

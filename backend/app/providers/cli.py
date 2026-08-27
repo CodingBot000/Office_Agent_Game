@@ -12,6 +12,9 @@ from pydantic import BaseModel, ValidationError
 from app.config import Settings
 from app.models import AgentDecision, IntentClassification, SocialImpactClassification
 from app.providers.base import DecisionContext, IntentContext, ProviderError, SocialImpactContext
+from app.providers.base import ReportContext
+from app.models import ReportExtraction
+from app.providers.structured import build_report_prompt
 from app.providers.structured import (
     build_decision_prompt,
     build_intent_prompt,
@@ -134,3 +137,14 @@ class CliSocialImpactProvider:
 
     def classify_social_impact(self, context: SocialImpactContext) -> SocialImpactClassification:
         return self.executor.run(SocialImpactClassification, build_social_impact_prompt(context))
+
+
+class CliReportProvider:
+    name = "cli"
+
+    def __init__(self, settings: Settings) -> None:
+        self.model = settings.ai_cli_model
+        self.executor = CliStructuredExecutor(settings, self.model)
+
+    def extract(self, context: ReportContext) -> ReportExtraction:
+        return self.executor.run(ReportExtraction, build_report_prompt(context))
