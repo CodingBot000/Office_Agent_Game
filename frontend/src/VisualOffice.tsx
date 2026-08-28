@@ -127,7 +127,7 @@ export function ModeChooser({ snapshot, onChoose }: { snapshot: GameSnapshot; on
         <div className="chooser-copy">
           <span className="chooser-kicker">INCIDENT 01 / SELECT INTERFACE</span>
           <h2>어떻게 사건을<br /><em>조사할까요?</em></h2>
-          <p>같은 사건 상태를 두 가지 방식으로 플레이할 수 있습니다. 대화와 증거에 집중하거나, Unity에서 만든 사무실 공간을 직접 돌아다녀 보세요.</p>
+          <p>같은 사건 상태를 두 가지 방식으로 플레이할 수 있습니다. 채팅창만으로 대화와 증거에 집중하거나, Game형태로 만든 가상 사무실 공간을 직접 돌아다녀 보세요.</p>
           <div className="chooser-line" />
           <span className="chooser-hint">게임 화면에서는 WASD / 방향키로 이동하고, 가까이 가서 E를 누르면 상호작용합니다.</span>
         </div>
