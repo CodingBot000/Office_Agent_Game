@@ -25,3 +25,9 @@ npm run build
 ```
 
 Vitest·React Testing Library·jsdom으로 대화 상태, 입력 포커스, IME 이벤트, 세션 충돌, 늦은 응답과 Game View 통합을 검사합니다. 이 테스트는 실제 OS 한글 입력기의 수동 검증이나 Unity 실행 화면의 시각 비교를 대신하지 않습니다.
+
+## 운영 배포
+
+Vercel 프로젝트는 `office-agent-frontend`이며 Production URL은 https://office-agent-frontend.vercel.app 입니다. Production 환경변수는 `VITE_API_BASE_URL=https://api.heartsignal.cloud`입니다. 변경 후 Production을 재빌드·배포해야 합니다. `/office-agent-backend` 접두사는 사용하지 않습니다.
+
+백엔드는 GCP `nexuslink-490118`의 Cloud Run `office-agent-api` (`asia-northeast3`)입니다. 배포와 검증은 [운영 배포 문서](../deploy/backend-deployment.md)를 따릅니다.
