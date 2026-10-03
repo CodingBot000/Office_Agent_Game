@@ -69,8 +69,8 @@ def test_cli_provider_parses_structured_output_and_removes_api_key(monkeypatch: 
     provider = CliDecisionProvider(
         Settings(
             ai_provider="cli",
-            openai_model="gpt-5.4-nano",
-            ai_cli_model="gpt-5.5",
+            openai_model="gpt-6-luna",
+            ai_cli_model="gpt-6-luna",
             ai_cli_command="codex",
         )
     )
@@ -119,7 +119,7 @@ def test_cli_intent_provider_parses_semantic_intent(monkeypatch: pytest.MonkeyPa
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    provider = CliIntentProvider(Settings(ai_provider="cli", ai_cli_model="gpt-5.5"))
+    provider = CliIntentProvider(Settings(ai_provider="cli", ai_cli_model="gpt-6-luna"))
     intent = provider.classify(
         IntentContext(
             player_input="상황을 설명해 줘",
@@ -164,7 +164,7 @@ def test_cli_social_impact_provider_uses_structured_schema(monkeypatch: pytest.M
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    provider = CliSocialImpactProvider(Settings(ai_provider="cli", ai_cli_model="gpt-5.6-luna"))
+    provider = CliSocialImpactProvider(Settings(ai_provider="cli", ai_cli_model="gpt-6-luna"))
     impact = provider.classify_social_impact(
         SocialImpactContext(
             player_input="QA의 키보드를 빼앗아 던진다.",

@@ -402,7 +402,7 @@ def test_comatose_npc_cannot_reveal_or_acknowledge_evidence():
 
 class FixedIntentProvider:
     name = "cli"
-    model = "gpt-5.5"
+    model = "gpt-6-luna"
 
     def classify(self, context: object) -> IntentClassification:
         return IntentClassification(intent="ask", target_npc_id="qa_01", confidence=0.99)
@@ -410,7 +410,7 @@ class FixedIntentProvider:
 
 class FailingIntentProvider:
     name = "cli"
-    model = "gpt-5.5"
+    model = "gpt-6-luna"
 
     def classify(self, context: object) -> IntentClassification:
         raise AssertionError("Office move hint must bypass the Intent Agent")
@@ -637,7 +637,7 @@ def test_unavailable_team_lead_reference_is_replaced_with_available_role_guidanc
 def test_request_evidence_reveals_requested_warning() -> None:
     class FixedEvidenceIntentProvider:
         name = "cli"
-        model = "gpt-5.6-luna"
+        model = "gpt-6-luna"
 
         def classify(self, context: object) -> IntentClassification:
             return IntentClassification(
@@ -828,7 +828,7 @@ def test_semantic_evidence_followup_resolves_conversation_reference_without_phra
 def test_misclassified_evidence_request_falls_back_to_npc_reveal(caplog) -> None:
     class WrongDirectionIntentProvider:
         name = "cli"
-        model = "gpt-5.6-luna"
+        model = "gpt-6-luna"
 
         def classify(self, context: object) -> IntentClassification:
             return IntentClassification(
@@ -1000,7 +1000,7 @@ def test_repeated_evidence_presentation_has_no_second_state_change() -> None:
 def test_selected_dialogue_target_overrides_misclassified_npc() -> None:
     class WrongTargetIntentProvider:
         name = "cli"
-        model = "gpt-5.6-luna"
+        model = "gpt-6-luna"
 
         def classify(self, context: object) -> IntentClassification:
             return IntentClassification(intent="talk", target_npc_id="qa_01", confidence=0.95)
@@ -1189,7 +1189,7 @@ def test_acknowledgement_without_knowledge_reference_is_allowed() -> None:
 def test_rejected_decision_dialogue_is_not_exposed_to_player() -> None:
     class MissingReferenceDecisionProvider:
         name = "cli"
-        model = "gpt-5.6-luna"
+        model = "gpt-6-luna"
 
         def decide(self, context: object) -> AgentDecision:
             return AgentDecision(

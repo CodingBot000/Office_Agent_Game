@@ -79,7 +79,7 @@ def test_openai_intent_provider_uses_responses_structured_output(monkeypatch: py
         Settings(
             ai_provider="openai",
             openai_api_key="test-key",
-            openai_model="gpt-5.4-nano",
+            openai_model="gpt-6-luna",
         )
     )
     intent = provider.classify(
@@ -123,7 +123,7 @@ def test_openai_decision_provider_validates_response(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     provider = OpenAIDecisionProvider(
-        Settings(ai_provider="openai", openai_api_key="test-key", openai_model="gpt-5.4-nano")
+        Settings(ai_provider="openai", openai_api_key="test-key", openai_model="gpt-6-luna")
     )
     decision = provider.decide(
         DecisionContext(
@@ -170,7 +170,7 @@ def test_openai_social_impact_provider_uses_responses_schema(monkeypatch: pytest
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     provider = OpenAISocialImpactProvider(
-        Settings(ai_provider="openai", openai_api_key="test-key", openai_model="gpt-5.4-nano")
+        Settings(ai_provider="openai", openai_api_key="test-key", openai_model="gpt-6-luna")
     )
     impact = provider.classify_social_impact(
         SocialImpactContext(

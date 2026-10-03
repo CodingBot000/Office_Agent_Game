@@ -108,7 +108,7 @@ def test_player_owned_object_does_not_create_player_self_relationship():
 
 class SocialIntentProvider:
     name = "cli"
-    model = "gpt-5.6-luna"
+    model = "gpt-6-luna"
 
     def classify(self, context: object) -> IntentClassification:
         if "업무" in getattr(context, "player_input", ""):
@@ -118,7 +118,7 @@ class SocialIntentProvider:
 
 class InvalidObjectSocialProvider:
     name = "cli"
-    model = "gpt-5.6-luna"
+    model = "gpt-6-luna"
 
     def classify_social_impact(self, context: object) -> SocialImpactClassification:
         return SocialImpactClassification(
@@ -137,7 +137,7 @@ class InvalidObjectSocialProvider:
 
 class FailingSocialProvider:
     name = "cli"
-    model = "gpt-5.6-luna"
+    model = "gpt-6-luna"
 
     def classify_social_impact(self, context: object) -> SocialImpactClassification:
         raise ProviderError("social classifier unavailable")
@@ -145,7 +145,7 @@ class FailingSocialProvider:
 
 class DuplicateTargetSocialProvider:
     name = "cli"
-    model = "gpt-5.6-luna"
+    model = "gpt-6-luna"
 
     def classify_social_impact(self, context: object) -> SocialImpactClassification:
         return SocialImpactClassification(
